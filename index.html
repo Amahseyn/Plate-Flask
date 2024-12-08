@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time Video Stream</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js"></script>
+  <style>
+    #video-container { width: 640px; height: 480px; }
+  </style>
+</head>
+<body>
+  <h1>Real-Time Video Stream</h1>
+  <div id="video-container">
+    <img id="video-frame" />
+  </div>
+  
+  <script>
+    const socket = io('http://localhost:5000');  // Change to your server URL
+
+    socket.on('new_frame', (data) => {
+      const imgElement = document.getElementById('video-frame');
+      const arrayBufferView = new Uint8Array(data.image);
+      const blob = new Blob([arrayBufferView], { type: "image/jpeg" });
+      const imageUrl = URL.createObjectURL(blob);
+      imgElement.src = imageUrl;
+    });
+
+    socket.emit('request_frame');
+  </script>
+</body>
+</html>
