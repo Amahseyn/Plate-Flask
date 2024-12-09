@@ -191,4 +191,4 @@ def insert_test_penalty():
 if __name__ == "__main__":
     #droptable()
     #create_penalties_table()
-    #insert_test_penalty()
+    insert_test_penalty()
