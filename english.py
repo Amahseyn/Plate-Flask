@@ -169,18 +169,18 @@ def process_frame(img, cameraId):
 
                     last_detection_time[current_char_display] = current_time
                     
-                    # try:
-                    #     data = {
-                    #         "date": timestamp,
-                    #         "raw_image_path": raw_url,
-                    #         "plate_cropped_image_path": plate_url,
-                    #         "predicted_string": englishoutput,
-                    #         "cameraid": cameraId
-                    #     }
-                    #     socketio.emit('plate_detected', data)
-                    #     print("Data emitted via SocketIO")
-                    # except Exception as e:
-                    #     print(f"Error emitting data: {e}")
+                    try:
+                        data = {
+                            "date": timestamp,
+                            "raw_image_path": raw_url,
+                            "plate_cropped_image_path": plate_url,
+                            "predicted_string": englishoutput,
+                            "cameraid": cameraId
+                        }
+                        socketio.emit('plate_detected', data)
+                        print("Data emitted via SocketIO")
+                    except Exception as e:
+                        print(f"Error emitting data: {e}")
     # Add FPS overlay
     tock = time.time()
     elapsed_time = tock - tick
