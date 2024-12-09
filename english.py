@@ -428,8 +428,8 @@ def get_all_plates():
 
         # Add dynamic filters based on input arguments
         if 'platename' in request.args:
-            filters.append("predicted_string ILIKE %s")
-            params.append(f"%{request.args.get('platename')}%")
+            filters.append("predicted_string LIKE %s")
+            params.append(f"%{request.args.get('platename')}%")  # Use LIKE for partial matching
 
         if 'date' in request.args:
             filters.append("date = %s")
@@ -439,6 +439,7 @@ def get_all_plates():
             filters.append("id = %s")
             params.append(request.args.get('id', type=int))
 
+        # Connect to the database
         conn = psycopg2.connect(
             dbname=DB_NAME,
             user=DB_USER,
@@ -466,16 +467,16 @@ def get_all_plates():
         cursor.execute(count_query, tuple(params))
         total_count = cursor.fetchone()[0]
 
+        # Handle pagination or fetch all records
         if page == 0:
             # Fetch all records without pagination
             query = base_query + " ORDER BY id DESC"
             cursor.execute(query, tuple(params))
         else:
-            # Apply pagination
+            # Fetch records with pagination
             offset = (page - 1) * limit
             query = base_query + " ORDER BY date DESC LIMIT %s OFFSET %s"
             cursor.execute(query, tuple(params) + (limit, offset))
-
         plates = cursor.fetchall()
 
         # Format the results
@@ -490,6 +491,7 @@ def get_all_plates():
             for row in plates
         ]
 
+        # Build the response
         response = {
             "count": total_count,
             "plates": plates_list,
@@ -509,7 +511,6 @@ def get_all_plates():
         if 'conn' in locals() and conn:
             conn.close()
 
-# Function to establish database connection
 def get_db_connection():
     conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
     return conn
@@ -900,5 +901,4 @@ def basic_authentication():
         return Response()
     
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000)
-
+    socketio.run(app, host='0.0.0.0',debug=True, port=5000)
