@@ -108,7 +108,6 @@ def process_frame(img, cameraId):
                 englishchardisplay=[]
                 
                 if state==True:
-                    print(state)
                     for persianchar in chars:
                         char_display.append(persianchar)
                     for englishchar in englishchars:
@@ -120,8 +119,7 @@ def process_frame(img, cameraId):
                     if current_char_display in last_detection_time:
                         last_time = last_detection_time[current_char_display]
                         time_diff = (current_time - last_time).total_seconds() / 60  # Time difference in minutes
-                        #print(f"timediff: ---->{time_diff}")
-                        # If detected less than before
+
                         if time_diff < 5:
                             persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
                             img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -131,7 +129,6 @@ def process_frame(img, cameraId):
                             txtout = f"Detected  {last_time.strftime('%Y-%m-%d %H:%M:%S')}"
                             cv2.putText(img, txtout, (100,200), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(10, 50, 255), thickness=2, lineType=cv2.LINE_AA)
                             continue  # Skip writing this plate as it was recently detected
-                    print("Deb")
 
                     englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
                     persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
@@ -155,13 +152,18 @@ def process_frame(img, cameraId):
                     # Save to database
                     raw_url = f"http://localhost:5000/static/images/raw/{raw_filename}"
                     plate_url = f"http://localhost:5000/static/images/plate/{plate_filename}"
-                    print(raw_url)
+                    #print(raw_url)
                     conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
                     cursor = conn.cursor()
                     cursor.execute(
-                        "INSERT INTO plates (date, raw_image_path, plate_cropped_image_path, predicted_string, camera_id) VALUES (%s, %s, %s, %s, %s)",
+                        """
+                        INSERT INTO plates (date, raw_image_path, plate_cropped_image_path, predicted_string, camera_id)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
                         (timestamp, raw_url, plate_url, englishoutput, cameraId)
                     )
+                    plate_id = cursor.fetchone()[0]
                     conn.commit()
                     cursor.close()
                     conn.close()
@@ -171,16 +173,20 @@ def process_frame(img, cameraId):
                     
                     try:
                         data = {
+                            "id": plate_id,  
                             "date": timestamp,
                             "raw_image_path": raw_url,
                             "plate_cropped_image_path": plate_url,
                             "predicted_string": englishoutput,
                             "cameraid": cameraId
                         }
+
+                        # Emit the data via SocketIO with the ID from the database
                         socketio.emit('plate_detected', data)
-                        print("Data emitted via SocketIO")
+                        print(f"Data emitted via SocketIO with ID: {plate_id}")
                     except Exception as e:
                         print(f"Error emitting data: {e}")
+
     # Add FPS overlay
     tock = time.time()
     elapsed_time = tock - tick
@@ -416,6 +422,23 @@ def get_all_plates():
         page = request.args.get('page', type=int, default=1)
         limit = request.args.get('limit', type=int, default=10)
 
+        # Dynamic filters
+        filters = []
+        params = []
+
+        # Add dynamic filters based on input arguments
+        if 'platename' in request.args:
+            filters.append("predicted_string ILIKE %s")
+            params.append(f"%{request.args.get('platename')}%")
+
+        if 'date' in request.args:
+            filters.append("date = %s")
+            params.append(request.args.get('date'))
+
+        if 'id' in request.args:
+            filters.append("id = %s")
+            params.append(request.args.get('id', type=int))
+
         conn = psycopg2.connect(
             dbname=DB_NAME,
             user=DB_USER,
@@ -425,56 +448,52 @@ def get_all_plates():
         )
         cursor = conn.cursor()
 
-        # Fetch the total count of plates
-        cursor.execute("SELECT COUNT(*) FROM plates")
+        # Build the base query
+        base_query = """
+            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path
+            FROM plates
+        """
+
+        # Add WHERE clause if there are filters
+        if filters:
+            base_query += " WHERE " + " AND ".join(filters)
+
+        # Fetch the total count with filters
+        count_query = "SELECT COUNT(*) FROM plates"
+        if filters:
+            count_query += " WHERE " + " AND ".join(filters)
+
+        cursor.execute(count_query, tuple(params))
         total_count = cursor.fetchone()[0]
 
         if page == 0:
-            # Fetch all records
-            cursor.execute("SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path FROM plates  ORDER BY id DESC")
-            plates = cursor.fetchall()
-
-            # Format the results
-            plates_list = [
-                {
-                    "id": row[0],
-                    "datetime": row[1],
-                    "predicted_string": row[2],
-                    "raw_image_path": row[3],
-                    "cropped_plate_path": row[4],
-                }
-                for row in plates
-            ]
-            response = {"plates": plates_list}
+            # Fetch all records without pagination
+            query = base_query + " ORDER BY id DESC"
+            cursor.execute(query, tuple(params))
         else:
             # Apply pagination
             offset = (page - 1) * limit
-            cursor.execute(
-                """
-                SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path
-                FROM plates
-                ORDER BY date DESC
-                LIMIT %s OFFSET %s
-                """,
-                (limit, offset)
-            )
-            plates = cursor.fetchall()
+            query = base_query + " ORDER BY date DESC LIMIT %s OFFSET %s"
+            cursor.execute(query, tuple(params) + (limit, offset))
 
-            # Format the results
-            plates_list = [
-                {
-                    "id": row[0],
-                    "datetime": row[1],
-                    "predicted_string": row[2],
-                    "raw_image_path": row[3],
-                    "cropped_plate_path": row[4],
-                }
-                for row in plates
-            ]
-            response = {
-                "count": total_count,
-                "plates": plates_list,
+        plates = cursor.fetchall()
+
+        # Format the results
+        plates_list = [
+            {
+                "id": row[0],
+                "datetime": row[1],
+                "predicted_string": row[2],
+                "raw_image_path": row[3],
+                "cropped_plate_path": row[4],
             }
+            for row in plates
+        ]
+
+        response = {
+            "count": total_count,
+            "plates": plates_list,
+        }
 
         return jsonify(response), 200
 
