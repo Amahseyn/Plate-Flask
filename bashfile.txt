@@ -1,0 +1,6 @@
+#installing Anaconda
+#instaallin postgress
+conda create -n plate python=3.10
+conda activate plate
+pip install -r requirements.txt
+python3 preparedb.py
