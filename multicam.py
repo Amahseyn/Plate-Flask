@@ -476,7 +476,7 @@ def get_all_plates():
         else:
             # Fetch records with pagination
             offset = (page - 1) * limit
-            query = base_query + " ORDER BY date DESC LIMIT %s OFFSET %s"
+            query = base_query + " ORDER BY id LIMIT %s OFFSET %s"
             cursor.execute(query, tuple(params) + (limit, offset))
         plates = cursor.fetchall()
 

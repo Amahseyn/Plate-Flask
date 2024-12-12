@@ -44,7 +44,7 @@ def droptable():
         cursor = conn.cursor()
 
         # Create the 'cameras' table
-        cursor.execute("""Drop TABLE IF EXISTS penalties""")
+        cursor.execute("""Drop TABLE IF EXISTS vehicles""")
         conn.commit()
         print("Table droped successfully.")
 
@@ -187,56 +187,64 @@ def insert_test_penalty():
         if conn:
             cursor.close()
             conn.close()
-def create_vehicles_table():
+def create_permits_table():
     """
-    Create the 'vehicles' table in the database.
+    Create a combined table 'vehicle_permit' with auto-incrementing vehicle_id starting from 0.
     """
     try:
         # Connect to the database
         conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
         cursor = conn.cursor()
 
-        # Create the 'vehicles' table
+        # Create the 'vehicle_info' table
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS vehicles (
-                vehicle_id SERIAL PRIMARY KEY,
-                license_plate VARCHAR(20) UNIQUE NOT NULL,
-                vehicle_type VARCHAR(50) NOT NULL,
-                owner_name VARCHAR(100),
-                company VARCHAR(100),
-                mine_id INT NOT NULL
+            CREATE TABLE IF NOT EXISTS vehicle_info (
+                vehicle_id SERIAL PRIMARY KEY,  -- Auto-incrementing ID
+                license_plate VARCHAR(20) UNIQUE NOT NULL
             )
         """)
-        conn.commit()
-        print("Table 'vehicles' created successfully.")
 
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
-def create_permit_table():
-    """
-    Create the 'permit' table in the database.
-    """
-    try:
-        # Connect to the database
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        cursor = conn.cursor()
-
-        # Create the 'permit' table
+        # Create the 'vehicle_permit' table
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS permit (
+            CREATE TABLE IF NOT EXISTS vehicle_permit (
                 permit_id SERIAL PRIMARY KEY,
-                vehicle_id INT NOT NULL,
+                vehicle_id INT NOT NULL REFERENCES vehicle_info(vehicle_id),
                 mine_id INT NOT NULL,
-                start_date DATE NOT NULL,
-                end_date DATE NOT NULL
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL
             )
         """)
         conn.commit()
-        print("Table 'permit' created successfully.")
+        print("Tables 'vehicle_info' and 'vehicle_permit' created successfully.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+def create_mine_info_table():
+    """
+    Create the 'mine_info' table to store information about mines.
+    """
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Create the 'mine_info' table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mine_info (
+                mine_id SERIAL PRIMARY KEY,  -- Auto-incrementing ID for each mine
+                mine_name VARCHAR(100) NOT NULL,  -- Name of the mine
+                location VARCHAR(100),  -- Location of the mine
+                owner_name VARCHAR(100),  -- Owner's name of the mine
+                contact_number VARCHAR(15)  -- Contact number for the mine
+            )
+        """)
+
+        conn.commit()
+        print("Table 'mine_info' created successfully.")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -245,9 +253,9 @@ def create_permit_table():
             cursor.close()
             conn.close()
 
+
+
+# Example usage
 if __name__ == "__main__":
-    #droptable()
-    #create_penalties_table()
-    #insert_test_penalty()
-    create_vehicles_table()
-    create_permit_table()
+    create_mine_info_table()
+
