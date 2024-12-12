@@ -187,8 +187,67 @@ def insert_test_penalty():
         if conn:
             cursor.close()
             conn.close()
+def create_vehicles_table():
+    """
+    Create the 'vehicles' table in the database.
+    """
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Create the 'vehicles' table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS vehicles (
+                vehicle_id SERIAL PRIMARY KEY,
+                license_plate VARCHAR(20) UNIQUE NOT NULL,
+                vehicle_type VARCHAR(50) NOT NULL,
+                owner_name VARCHAR(100),
+                company VARCHAR(100),
+                mine_id INT NOT NULL
+            )
+        """)
+        conn.commit()
+        print("Table 'vehicles' created successfully.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+def create_permit_table():
+    """
+    Create the 'permit' table in the database.
+    """
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Create the 'permit' table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS permit (
+                permit_id SERIAL PRIMARY KEY,
+                vehicle_id INT NOT NULL,
+                mine_id INT NOT NULL,
+                start_date DATE NOT NULL,
+                end_date DATE NOT NULL
+            )
+        """)
+        conn.commit()
+        print("Table 'permit' created successfully.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
 
 if __name__ == "__main__":
     #droptable()
     #create_penalties_table()
-    insert_test_penalty()
+    #insert_test_penalty()
+    create_vehicles_table()
+    create_permit_table()

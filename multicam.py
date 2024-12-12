@@ -428,8 +428,9 @@ def get_all_plates():
 
         # Add dynamic filters based on input arguments
         if 'platename' in request.args:
-            filters.append("predicted_string LIKE %s")
-            params.append(f"%{request.args.get('platename')}%")  # Use LIKE for partial matching
+            search_value = request.args.get('platename').lower().replace('-', '')
+            filters.append("REPLACE(LOWER(predicted_string), '-', '') LIKE %s")
+            params.append(f"%{search_value}%")
 
         if 'date' in request.args:
             filters.append("date = %s")
@@ -572,8 +573,8 @@ def get_penalties():
         # Format the result
         penalties_list = []
         for row in penalties:
-            platename = row[0]
-            cursor.execute(plate_query, (platename,))
+            plateid = row[0]
+            cursor.execute(plate_query, (plateid,))
             plate_result = cursor.fetchone()
             predicted_string = plate_result[0] if plate_result else None
 
