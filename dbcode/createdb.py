@@ -223,6 +223,48 @@ def create_permits_table():
         if conn:
             cursor.close()
             conn.close()
+
+def insert_vehicle_permit(license_plate, mine_id, start_date, end_date):
+    """
+    Insert a record into the vehicle_permit table with auto-generated vehicle_id.
+    """
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Insert or get the vehicle_id from vehicle_info
+        cursor.execute("""
+            INSERT INTO vehicle_info (license_plate)
+            VALUES (%s)
+            ON CONFLICT (license_plate) DO NOTHING
+            RETURNING vehicle_id
+        """, (license_plate,))
+        
+        result = cursor.fetchone()
+        if result is None:
+            # If the license plate already exists, fetch its vehicle_id
+            cursor.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
+            vehicle_id = cursor.fetchone()[0]
+        else:
+            vehicle_id = result[0]
+
+        # Insert into the vehicle_permit table
+        cursor.execute("""
+            INSERT INTO vehicle_permit (vehicle_id, mine_id, start_date, end_date)
+            VALUES (%s, %s, %s, %s)
+        """, (vehicle_id, mine_id, start_date, end_date))
+        
+        conn.commit()
+        print(f"Permit record for vehicle_id {vehicle_id} added successfully.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
 def create_mine_info_table():
     """
     Create the 'mine_info' table to store information about mines.
@@ -254,8 +296,44 @@ def create_mine_info_table():
             conn.close()
 
 
+def insert_into_mine_info(mine_name, location, owner_name, contact_number):
+    """
+    Insert a new record into the 'mine_info' table.
+    
+    Args:
+        mine_name (str): Name of the mine.
+        location (str): Location of the mine.
+        owner_name (str): Owner's name of the mine.
+        established_date (str): Established date of the mine in 'YYYY-MM-DD' format.
+        contact_number (str): Contact number for the mine.
+    """
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Insert data into the 'mine_info' table
+        cursor.execute("""
+            INSERT INTO mine_info (mine_name, location, owner_name, contact_number)
+            VALUES (%s, %s, %s, %s)
+        """, (mine_name, location, owner_name, contact_number))
+
+        conn.commit()
+        print("Data inserted successfully into 'mine_info' table.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
+# Example usage:
 
 # Example usage
 if __name__ == "__main__":
-    create_mine_info_table()
+    insert_vehicle_permit("25A63418", 1, "2024-4-16", "2024-4-16")
+    insert_vehicle_permit("45W45601", 1, "2024-4-16", "2024-4-16")
+    insert_vehicle_permit("45W45601", 1, "2024-4-16", "2024-4-16")
+
 
