@@ -1,6 +1,8 @@
 import eventlet
 eventlet.monkey_patch()
 from flask import Flask, Response, send_file, jsonify,send_from_directory
+from psycopg2.extras import RealDictCursor
+
 # import socket
 # import json
 from psycopg2 import sql, OperationalError, DatabaseError
@@ -889,6 +891,210 @@ def patch_penalty(id):
         print("Error occurred:", traceback.format_exc())
         return jsonify({'error': str(e)}), 400
 
+### POST: Add a new mine record ###
+@app.route('/mine', methods=['POST'])
+@cross_origin(supports_credentials=True)
+def add_mine():
+    try:
+        # Extract data from the request
+        data = request.get_json()
+        mine_name = data['mine_name']
+        location = data.get('location')  # Optional
+        owner_name = data.get('owner_name')  # Optional
+        contact_number = data.get('contact_number')  # Optional
+
+        # Connect to the database
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Insert data into the mine_info table
+        query = """
+        INSERT INTO mine_info (mine_name, location, owner_name, contact_number)
+        VALUES (%s, %s, %s, %s)
+        RETURNING mine_id;
+        """
+        cur.execute(query, (mine_name, location, owner_name, contact_number))
+        mine_id = cur.fetchone()[0]
+
+        # Commit the transaction
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Return success response
+        return jsonify({'message': 'Mine added successfully', 'mine_id': mine_id}), 201
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/mine/<int:mine_id>', methods=['PUT'])
+@cross_origin(supports_credentials=True)
+def update_mine(mine_id):
+    try:
+        # Extract data from the request
+        data = request.get_json()
+        mine_name = data['mine_name']
+        location = data['location']
+        owner_name = data['owner_name']
+        contact_number = data['contact_number']
+
+        # Connect to the database
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Update the record in the mine_info table
+        query = """
+        UPDATE mine_info
+        SET mine_name = %s, location = %s, owner_name = %s, contact_number = %s
+        WHERE mine_id = %s;
+        """
+        cur.execute(query, (mine_name, location, owner_name, contact_number, mine_id))
+
+        # Commit the transaction
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Return success response
+        return jsonify({'message': 'Mine updated successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/mine/<int:mine_id>', methods=['PATCH'])
+@cross_origin(supports_credentials=True)
+def patch_mine(mine_id):
+    try:
+        # Extract data from the request
+        data = request.get_json()
+
+        # Build the query dynamically based on the provided fields
+        fields = []
+        values = []
+        for key, value in data.items():
+            fields.append(f"{key} = %s")
+            values.append(value)
+
+        # Ensure at least one field is provided
+        if not fields:
+            return jsonify({'error': 'No fields to update provided'}), 400
+
+        values.append(mine_id)  # Add mine_id for the WHERE clause
+        query = f"UPDATE mine_info SET {', '.join(fields)} WHERE mine_id = %s;"
+
+        # Connect to the database
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Execute the query
+        cur.execute(query, values)
+
+        # Commit the transaction
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Return success response
+        return jsonify({'message': 'Mine partially updated successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+@app.route('/mine', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def get_mines():
+    try:
+        # Extract query parameters
+        page = int(request.args.get('page', 1))  # Default to page 1 if not provided
+        limit = int(request.args.get('limit', 10))  # Default limit is 10
+        search = request.args.get('search', '')  # Search query (default empty)
+
+        # If page is 0, return all records
+        if page == 0:
+            query = """
+                SELECT * FROM mine_info
+                WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s;
+            """
+            search_term = f"%{search}%"
+
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+
+            cur.execute(query, (search_term, search_term, search_term))
+            all_records = cur.fetchall()
+            count_query = "SELECT COUNT(*) FROM mine_info WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s;"
+            cur.execute(count_query, (search_term, search_term, search_term))
+            total_count = cur.fetchone()['count']
+
+            cur.close()
+            conn.close()
+
+            return jsonify({
+                'data': all_records,
+                'total_count': total_count
+            }), 200
+
+        # Otherwise, apply pagination
+        offset = (page - 1) * limit
+        query = """
+            SELECT * FROM mine_info
+            WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s
+            LIMIT %s OFFSET %s;
+        """
+        count_query = """
+            SELECT COUNT(*) FROM mine_info
+            WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s;
+        """
+        search_term = f"%{search}%"
+
+        # Connect to the database
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Execute the queries
+        cur.execute(query, (search_term, search_term, search_term, limit, offset))
+        records = cur.fetchall()
+
+        cur.execute(count_query, (search_term, search_term, search_term))
+        total_count = cur.fetchone()['count']
+
+        cur.close()
+        conn.close()
+
+        # Return the data with pagination info
+        return jsonify({
+            'data': records,
+            'total_count': total_count,
+            'page': page,
+            'limit': limit
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+### DELETE: Remove a mine record ###
+@app.route('/mine/<int:mine_id>', methods=['DELETE'])
+@cross_origin(supports_credentials=True)
+def delete_mine(mine_id):
+    try:
+        # Connect to the database
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Delete the record from the mine_info table
+        query = "DELETE FROM mine_info WHERE mine_id = %s;"
+        cur.execute(query, (mine_id,))
+
+        # Commit the transaction
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Return success response
+        return jsonify({'message': 'Mine deleted successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 @app.route('/images/<path:filename>')
 @cross_origin(supports_credentials=True)
