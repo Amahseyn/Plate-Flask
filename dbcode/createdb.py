@@ -44,7 +44,7 @@ def droptable():
         cursor = conn.cursor()
 
         # Create the 'cameras' table
-        cursor.execute("""Drop TABLE IF EXISTS vehicles""")
+        cursor.execute("""Drop TABLE IF EXISTS mine_info""")
         conn.commit()
         print("Table droped successfully.")
 
@@ -279,6 +279,7 @@ def create_mine_info_table():
             CREATE TABLE IF NOT EXISTS mine_info (
                 mine_id SERIAL PRIMARY KEY,  -- Auto-incrementing ID for each mine
                 mine_name VARCHAR(100) NOT NULL,  -- Name of the mine
+                cameraid VARCHAR(100) NOT NULL,
                 location VARCHAR(100),  -- Location of the mine
                 owner_name VARCHAR(100),  -- Owner's name of the mine
                 contact_number VARCHAR(15)  -- Contact number for the mine
@@ -332,8 +333,5 @@ def insert_into_mine_info(mine_name, location, owner_name, contact_number):
 
 # Example usage
 if __name__ == "__main__":
-    insert_vehicle_permit("25A63418", 1, "2024-4-16", "2024-4-16")
-    insert_vehicle_permit("45W45601", 1, "2024-4-16", "2024-4-16")
-    insert_vehicle_permit("45W45601", 1, "2024-4-16", "2024-4-16")
-
+    droptable()
 

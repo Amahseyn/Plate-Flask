@@ -894,73 +894,85 @@ def patch_penalty(id):
 ### POST: Add a new mine record ###
 @app.route('/mine', methods=['POST'])
 @cross_origin(supports_credentials=True)
-def add_mine():
+def create_mine():
+    data = request.json
     try:
-        # Extract data from the request
-        data = request.get_json()
-        mine_name = data['mine_name']
-        location = data.get('location')  # Optional
-        owner_name = data.get('owner_name')  # Optional
-        contact_number = data.get('contact_number')  # Optional
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
 
-        # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Insert data into the mine_info table
-        query = """
-        INSERT INTO mine_info (mine_name, location, owner_name, contact_number)
-        VALUES (%s, %s, %s, %s)
-        RETURNING mine_id;
-        """
-        cur.execute(query, (mine_name, location, owner_name, contact_number))
-        mine_id = cur.fetchone()[0]
-
-        # Commit the transaction
+        cursor.execute("""
+            INSERT INTO mine_info (mine_name, cameraid, location, owner_name, contact_number)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING mine_id
+        """, (data['mine_name'], data['cameraid'], data.get('location'), data.get('owner_name'), data.get('contact_number')))
+        mine_id = cursor.fetchone()[0]
         conn.commit()
-        cur.close()
-        conn.close()
 
-        # Return success response
-        return jsonify({'message': 'Mine added successfully', 'mine_id': mine_id}), 201
+        return jsonify({"message": "Mine created successfully", "mine_id": mine_id}), 201
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
 
 
 @app.route('/mine/<int:mine_id>', methods=['PUT'])
 @cross_origin(supports_credentials=True)
 def update_mine(mine_id):
+    data = request.json
     try:
-        # Extract data from the request
-        data = request.get_json()
-        mine_name = data['mine_name']
-        location = data['location']
-        owner_name = data['owner_name']
-        contact_number = data['contact_number']
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
 
-        # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Update the record in the mine_info table
-        query = """
-        UPDATE mine_info
-        SET mine_name = %s, location = %s, owner_name = %s, contact_number = %s
-        WHERE mine_id = %s;
-        """
-        cur.execute(query, (mine_name, location, owner_name, contact_number, mine_id))
-
-        # Commit the transaction
+        cursor.execute("""
+            UPDATE mine_info
+            SET mine_name = %s, cameraid = %s, location = %s, owner_name = %s, contact_number = %s
+            WHERE mine_id = %s
+        """, (data['mine_name'], data['cameraid'], data.get('location'), data.get('owner_name'), data.get('contact_number'), mine_id))
         conn.commit()
-        cur.close()
-        conn.close()
 
-        # Return success response
-        return jsonify({'message': 'Mine updated successfully'}), 200
+        return jsonify({"message": "Mine updated successfully"}), 200
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
+
+# PATCH: Partially update a mine record
+@app.route('/mine/<int:mine_id>', methods=['PATCH'])
+@cross_origin(supports_credentials=True)
+def patch_mine(mine_id):
+    data = request.json
+    try:
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        update_fields = []
+        update_values = []
+        for field, value in data.items():
+            update_fields.append(f"{field} = %s")
+            update_values.append(value)
+
+        update_query = f"UPDATE mine_info SET {', '.join(update_fields)} WHERE mine_id = %s"
+        update_values.append(mine_id)
+
+        cursor.execute(update_query, update_values)
+        conn.commit()
+
+        return jsonify({"message": "Mine partially updated successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
 
 @app.route('/mine/<int:mine_id>', methods=['PATCH'])
 @cross_origin(supports_credentials=True)
@@ -1064,9 +1076,7 @@ def get_mines():
         # Return the data with pagination info
         return jsonify({
             'data': records,
-            'total_count': total_count,
-            'page': page,
-            'limit': limit
+            'total_count': total_count
         }), 200
 
     except Exception as e:
@@ -1092,6 +1102,202 @@ def delete_mine(mine_id):
 
         # Return success response
         return jsonify({'message': 'Mine deleted successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/permit', methods=['POST'])
+@cross_origin(supports_credentials=True)
+def add_vehicle_permit():
+    try:
+        data = request.get_json()
+        license_plate = data['license_plate']
+        mine_id = data['mine_id']
+        start_date = data['start_date']
+        end_date = data['end_date']
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Insert or fetch vehicle_id from vehicle_info
+        cur.execute(
+            """
+            INSERT INTO vehicle_info (license_plate)
+            VALUES (%s)
+            ON CONFLICT (license_plate) DO NOTHING
+            RETURNING vehicle_id;
+            """,
+            (license_plate,)
+        )
+        result = cur.fetchone()
+        if result is None:
+            cur.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
+            vehicle_id = cur.fetchone()[0]
+        else:
+            vehicle_id = result[0]
+
+        # Insert data into vehicle_permit
+        cur.execute(
+            """
+            INSERT INTO vehicle_permit (vehicle_id, mine_id, start_date, end_date)
+            VALUES (%s, %s, %s, %s);
+            """,
+            (vehicle_id, mine_id, start_date, end_date)
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({'message': 'Vehicle permit added successfully'}), 201
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+### PUT: Update a vehicle permit ###
+@app.route('/permit/<int:permit_id>', methods=['PUT'])
+@cross_origin(supports_credentials=True)
+def update_vehicle_permit(permit_id):
+    try:
+        data = request.get_json()
+        mine_id = data['mine_id']
+        start_date = data['start_date']
+        end_date = data['end_date']
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Update the vehicle_permit
+        cur.execute(
+            """
+            UPDATE vehicle_permit
+            SET mine_id = %s, start_date = %s, end_date = %s
+            WHERE permit_id = %s;
+            """,
+            (mine_id, start_date, end_date, permit_id)
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({'message': 'Vehicle permit updated successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+### PATCH: Partially update a vehicle permit ###
+@app.route('/permit/<int:permit_id>', methods=['PATCH'])
+@cross_origin(supports_credentials=True)
+def patch_vehicle_permit(permit_id):
+    try:
+        data = request.get_json()
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Dynamically build the query based on provided fields
+        fields = []
+        values = []
+        for key, value in data.items():
+            fields.append(f"{key} = %s")
+            values.append(value)
+
+        values.append(permit_id)
+        query = f"UPDATE vehicle_permit SET {', '.join(fields)} WHERE permit_id = %s;"
+
+        cur.execute(query, tuple(values))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({'message': 'Vehicle permit updated successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+### DELETE: Remove a vehicle permit ###
+@app.route('/permit/<int:permit_id>', methods=['DELETE'])
+@cross_origin(supports_credentials=True)
+def delete_vehicle_permit(permit_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Delete the vehicle_permit
+        cur.execute("DELETE FROM vehicle_permit WHERE permit_id = %s;", (permit_id,))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({'message': 'Vehicle permit deleted successfully'}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+### GET: Retrieve vehicle permits with pagination and optional filtering ###
+@app.route('/permit', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def get_vehicle_permits():
+    try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 10))
+        license_plate = request.args.get('license_plate', '')
+
+        offset = (page - 1) * limit
+
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        if license_plate:
+            # Query with filtering by license_plate
+            query = """
+                SELECT vp.*, vi.license_plate
+                FROM vehicle_permit vp
+                JOIN vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
+                WHERE vi.license_plate ILIKE %s
+                LIMIT %s OFFSET %s;
+            """
+            count_query = """
+                SELECT COUNT(*)
+                FROM vehicle_permit vp
+                JOIN vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
+                WHERE vi.license_plate ILIKE %s;
+            """
+            search_term = f"%{license_plate}%"
+
+            cur.execute(query, (search_term, limit, offset))
+            records = cur.fetchall()
+
+            cur.execute(count_query, (search_term,))
+            total_count = cur.fetchone()['count']
+        else:
+            # Query without filtering
+            query = """
+                SELECT vp.*, vi.license_plate
+                FROM vehicle_permit vp
+                JOIN vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
+                LIMIT %s OFFSET %s;
+            """
+            count_query = "SELECT COUNT(*) FROM vehicle_permit;"
+
+            cur.execute(query, (limit, offset))
+            records = cur.fetchall()
+
+            cur.execute(count_query)
+            total_count = cur.fetchone()['count']
+
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            'data': records,
+            'total_count': total_count,
+            'page': page,
+            'limit': limit
+        }), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 400
