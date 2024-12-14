@@ -195,15 +195,6 @@ def process_frame(img, cameraId):
     fps_text = f"FPS: {1 / elapsed_time:.2f}"
     cv2.putText(img, fps_text, (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 50, 255), 2)
     return img
-@socketio.on('connect')
-def handle_connect():
-    print("Client connected")
-
-@socketio.on('message')
-def handle_message(data):
-    print(f"Message received: {data}")
-    # Optionally, you can emit a response back
-    emit('response', {'status': 'Message received'})
 
 @app.route('/camera/<int:cameraId>/stream', methods=['GET'])
 @cross_origin(supports_credentials=True)

@@ -71,11 +71,13 @@ def create_plates_table():
                 raw_image_path TEXT NOT NULL,
                 plate_cropped_image_path TEXT NOT NULL,
                 predicted_string TEXT NOT NULL,
-                camera_id TEXT NOT NULL
+                camera_id TEXT NOT NULL,
+                sent BOOLEAN DEFAULT FALSE,
+                valid BOOLEAN DEFAULT FALSE
             )
         """)
         conn.commit()
-        print("Table 'plates' created successfully.")
+        print("Table 'plates' created successfully with 'sent' and 'valid' columns.")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -83,6 +85,7 @@ def create_plates_table():
         if conn:
             cursor.close()
             conn.close()
+
 def create_penalties_table():
     """
     Create the 'penalties' table in the newly created database.
@@ -278,8 +281,8 @@ def create_mine_info_table():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS mine_info (
                 mine_id SERIAL PRIMARY KEY,  -- Auto-incrementing ID for each mine
-                mine_name VARCHAR(100) NOT NULL,  -- Name of the mine
-                cameraid VARCHAR(100) NOT NULL,
+                mine_name VARCHAR(100), 
+                cameraid VARCHAR(100),  
                 location VARCHAR(100),  -- Location of the mine
                 owner_name VARCHAR(100),  -- Owner's name of the mine
                 contact_number VARCHAR(15)  -- Contact number for the mine
@@ -329,9 +332,10 @@ def insert_into_mine_info(mine_name, location, owner_name, contact_number):
             cursor.close()
             conn.close()
 
-# Example usage:
 
 # Example usage
 if __name__ == "__main__":
     droptable()
+    #create_plates_table()
+    create_mine_info_table()
 
