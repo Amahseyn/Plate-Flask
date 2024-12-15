@@ -1,9 +1,5 @@
 
-from flask import Flask, Response, send_file, jsonify,send_from_directory
-
 from apscheduler.schedulers.background import BackgroundScheduler
-
-from flask import request, jsonify, send_file
 import psycopg2
 import cv2
 import threading
@@ -23,9 +19,8 @@ params = Parameters()
 from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
 
-
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
+video_lock = threading.Lock()
+frame = None 
 
 DB_NAME = "license_plate_db"
 DB_USER = "postgres"
@@ -83,7 +78,7 @@ def detectPlateChars(croppedPlate):
 
 last_detection_time = {}
 # Global dictionary to track last detection times
-def process_frame(img, cameraId):
+def process_frame(img, cameraId,mine_id):
     global last_char_display, last_detection_time
     tick = time.time()
 
@@ -180,10 +175,10 @@ def video_feed(cameraId):
             cursor = conn.cursor()
             cursor.execute("SELECT cameralink FROM cameras WHERE id = %s", (cameraId,))
             camera_link = cursor.fetchone()
-            cursor.execute("SELECT mine_id FROM mine_info WHERE cameraid = %s",(cameraId,))
+            cursor.execute("SELECT mine_id FROM mine_info WHERE cameraid = %s",(str(cameraId),))
             mine_id = cursor.fetchone()
             if camera_link is None:
-                return jsonify({"error": "Camera not found"}), 404
+                print("error: Camera not found, 404")
 
             camera_link = camera_link[0]  
             camera_link = "a09.mp4"
@@ -197,21 +192,20 @@ def video_feed(cameraId):
             cap.set(cv2.CAP_PROP_FPS, fps)
             if not cap.isOpened():
                 print(f"Failed to open video stream from {camera_link}")
-                return jsonify({"error": "Failed to open camera stream"}), 500
             while True:
                 ret, img = cap.read()
                 if not ret:
                     print("No frames read. Exiting...")
                     break
                 img = cv2.resize(img,(width,height))
-                processed_frame = process_frame(img)
+                processed_frame = process_frame(img,cameraId,mine_id)
 
                 with lock:
                     frame = processed_frame
                 time.sleep(0.05)
             #cap.release()
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return print(f"error: {str(e)}, 500")
         finally:
             if conn:
                 cursor.close()
@@ -231,20 +225,21 @@ def send_data_to_server():
 
         if plates:
             for plate in plates:
-                plate_id, date, raw_image, plate_image, predicted_string, camera_id = plate
+                plate_id, date, raw_image, plate_image, predicted_string, camera_id,_,valid = plate
                 data = {
                     "id": plate_id,
                     "date": date,
                     "raw_image": raw_image,
                     "plate_image": plate_image,
                     "predicted_string": predicted_string,
-                    "camera_id": camera_id
+                    "camera_id": camera_id,
+                    'permit':valid
                 }
                 
                 success = False
                 while not success:
                     try:
-                        response = requests.post("http://remote_server_endpoint", json=data)
+                        response = requests.post("http://127.0.0.1:5000/process_data", json=data)
                         if response.status_code == 200:
                             success = True
                             cursor.execute("UPDATE plates SET sent = TRUE WHERE id = %s", (plate_id,))
@@ -266,7 +261,7 @@ def send_data_to_server():
 # Function to schedule sending data every 5 minutes
 def schedule_data_transfer():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(send_data_to_server, 'interval', minutes=5)
+    scheduler.add_job(send_data_to_server, 'interval', minutes=1)
     scheduler.start()
 def check_vehicle_permit(license_plate, mine_id):
     """
@@ -280,7 +275,6 @@ def check_vehicle_permit(license_plate, mine_id):
         bool: True if the permit is valid, False otherwise.
     """
     try:
-        # Query to get the vehicle ID based on the license plate
         cursor.execute("""
             SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s
         """, (license_plate,))
@@ -292,7 +286,6 @@ def check_vehicle_permit(license_plate, mine_id):
         
         vehicle_id = vehicle_result[0]
 
-        # Query to check the permit for the vehicle and mine ID
         cursor.execute("""
             SELECT start_date, end_date FROM vehicle_permit
             WHERE vehicle_id = %s AND mine_id = %s
@@ -306,7 +299,6 @@ def check_vehicle_permit(license_plate, mine_id):
         start_date, end_date = permit_result
         current_date = datetime.now().date()
 
-        # Check if the current date is within the permit's validity range
         if datetime.strptime(start_date, "%Y-%m-%d").date() <= current_date <= datetime.strptime(end_date, "%Y-%m-%d").date():
             print(f"Vehicle '{license_plate}' has a valid permit for mine ID '{mine_id}'.")
             return True
@@ -318,6 +310,19 @@ def check_vehicle_permit(license_plate, mine_id):
         print(f"Error: {e}")
         return False
 
+def main():
+    camera_id = 1  # Example camera ID
 
+    video_thread = threading.Thread(target=video_feed, args=(camera_id,))
+    video_thread.start()
 
-    
+    schedule_data_transfer()
+    try:
+        while True:
+            time.sleep(.05)
+    except KeyboardInterrupt:
+        print("Stopping threads and scheduler.")
+        video_thread.join()
+
+if __name__ == "__main__":
+    main()    
