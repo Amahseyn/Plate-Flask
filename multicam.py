@@ -445,7 +445,7 @@ def get_all_plates():
 
         # Build the base query
         base_query = """
-            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path,valdiate
+            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path,valid
             FROM plates
         """
 
@@ -1121,6 +1121,7 @@ def add_vehicle_permit():
 def update_vehicle_permit(permit_id):
     try:
         data = request.get_json()
+        license_plate = data['license_plate']
         mine_id = data['mine_id']
         start_date = data['start_date']
         end_date = data['end_date']
@@ -1128,14 +1129,47 @@ def update_vehicle_permit(permit_id):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Update the vehicle_permit
+        # Fetch the current vehicle_id linked to the permit
+        cur.execute(
+            """
+            SELECT vehicle_id 
+            FROM vehicle_permit
+            WHERE permit_id = %s;
+            """,
+            (permit_id,)
+        )
+        result = cur.fetchone()
+        if not result:
+            return jsonify({'error': 'Permit ID not found'}), 404
+
+        current_vehicle_id = result[0]
+
+        # Check if the new license_plate exists in vehicle_info, or add it
+        cur.execute(
+            """
+            INSERT INTO vehicle_info (license_plate)
+            VALUES (%s)
+            ON CONFLICT (license_plate) DO NOTHING
+            RETURNING vehicle_id;
+            """,
+            (license_plate,)
+        )
+        result = cur.fetchone()
+        if result:
+            new_vehicle_id = result[0]
+        else:
+            # Fetch the vehicle_id for the existing license_plate
+            cur.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
+            new_vehicle_id = cur.fetchone()[0]
+
+        # Update the vehicle_permit with the new vehicle_id and other details
         cur.execute(
             """
             UPDATE vehicle_permit
-            SET mine_id = %s, start_date = %s, end_date = %s
+            SET vehicle_id = %s, mine_id = %s, start_date = %s, end_date = %s
             WHERE permit_id = %s;
             """,
-            (mine_id, start_date, end_date, permit_id)
+            (new_vehicle_id, mine_id, start_date, end_date, permit_id)
         )
 
         conn.commit()
@@ -1156,6 +1190,31 @@ def patch_vehicle_permit(permit_id):
 
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # Check if license_plate is in the data
+        if 'license_plate' in data:
+            license_plate = data.pop('license_plate')
+
+            # Insert or fetch vehicle_id from vehicle_info
+            cur.execute(
+                """
+                INSERT INTO vehicle_info (license_plate)
+                VALUES (%s)
+                ON CONFLICT (license_plate) DO NOTHING
+                RETURNING vehicle_id;
+                """,
+                (license_plate,)
+            )
+            result = cur.fetchone()
+            if result:
+                vehicle_id = result[0]
+            else:
+                # Fetch the vehicle_id for the existing license_plate
+                cur.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
+                vehicle_id = cur.fetchone()[0]
+
+            # Add vehicle_id to the update fields
+            data['vehicle_id'] = vehicle_id
 
         # Dynamically build the query based on provided fields
         fields = []
@@ -1178,6 +1237,7 @@ def patch_vehicle_permit(permit_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
+
 ### DELETE: Remove a vehicle permit ###
 @app.route('/permit/<int:permit_id>', methods=['DELETE'])
 @cross_origin(supports_credentials=True)
@@ -1198,70 +1258,83 @@ def delete_vehicle_permit(permit_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-### GET: Retrieve vehicle permits with pagination and optional filtering ###
 @app.route('/permit', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_vehicle_permits():
     try:
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 10))
+        # Get query parameters
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 10, type=int)
         license_plate = request.args.get('license_plate', '')
 
-        offset = (page - 1) * limit
-
+        # Connect to the database
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
+        # Base query to fetch permits with mine_name
+        base_query = """
+            SELECT 
+                vp.*, 
+                vi.license_plate, 
+                mi.mine_id, 
+                mi.mine_name
+            FROM 
+                vehicle_permit vp
+            JOIN 
+                vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
+            JOIN 
+                mine_info mi ON vp.mine_id = mi.mine_id
+        """
+        count_query = """
+            SELECT COUNT(*)
+            FROM 
+                vehicle_permit vp
+            JOIN 
+                vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
+            JOIN 
+                mine_info mi ON vp.mine_id = mi.mine_id
+        """
+        where_clause = ""
+        params = []
+
+        # Filter by license_plate if provided
         if license_plate:
-            # Query with filtering by license_plate
-            query = """
-                SELECT vp.*, vi.license_plate
-                FROM vehicle_permit vp
-                JOIN vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
-                WHERE vi.license_plate ILIKE %s
-                LIMIT %s OFFSET %s;
-            """
-            count_query = """
-                SELECT COUNT(*)
-                FROM vehicle_permit vp
-                JOIN vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
-                WHERE vi.license_plate ILIKE %s;
-            """
-            search_term = f"%{license_plate}%"
+            where_clause = "WHERE vi.license_plate ILIKE %s"
+            params.append(f"%{license_plate}%")
 
-            cur.execute(query, (search_term, limit, offset))
-            records = cur.fetchall()
-
-            cur.execute(count_query, (search_term,))
-            total_count = cur.fetchone()['count']
+        # Add pagination or fetch all records
+        if page == 0:
+            query = f"{base_query} {where_clause} ORDER BY permit_id DESC;"
+            count_query = f"{count_query} {where_clause};"
         else:
-            # Query without filtering
-            query = """
-                SELECT vp.*, vi.license_plate
-                FROM vehicle_permit vp
-                JOIN vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
-                LIMIT %s OFFSET %s;
-            """
-            count_query = "SELECT COUNT(*) FROM vehicle_permit;"
+            offset = (page - 1) * limit
+            query = f"{base_query} ORDER BY permit_id DESC {where_clause} LIMIT %s OFFSET %s ;"
+            params.extend([limit, offset])
 
-            cur.execute(query, (limit, offset))
-            records = cur.fetchall()
+        # Execute the query
+        cur.execute(query, tuple(params))
+        records = cur.fetchall()
 
-            cur.execute(count_query)
-            total_count = cur.fetchone()['count']
+        # Execute count query
+        cur.execute(count_query, tuple(params[:1]))
+        total_count = cur.fetchone()['count']
 
+        # Close database connection
         cur.close()
         conn.close()
 
+        # Return response
         return jsonify({
             'data': records,
             'total_count': total_count,
             'page': page,
-            'limit': limit
+            'limit': limit if page != 0 else total_count
         }), 200
 
     except Exception as e:
+        # Handle errors
         return jsonify({'error': str(e)}), 400
+
 
 @app.route('/images/<path:filename>')
 @cross_origin(supports_credentials=True)
