@@ -445,7 +445,7 @@ def get_all_plates():
 
         # Build the base query
         base_query = """
-            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path
+            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path,valdiate
             FROM plates
         """
 
@@ -481,6 +481,7 @@ def get_all_plates():
                 "predicted_string": row[2],
                 "raw_image_path": row[3],
                 "cropped_plate_path": row[4],
+                "permit":row[5]
             }
             for row in plates
         ]
@@ -925,37 +926,6 @@ def update_mine(mine_id):
         conn.commit()
 
         return jsonify({"message": "Mine updated successfully"}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
-
-
-# PATCH: Partially update a mine record
-@app.route('/mine/<int:mine_id>', methods=['PATCH'])
-@cross_origin(supports_credentials=True)
-def patch_mine(mine_id):
-    data = request.json
-    try:
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        cursor = conn.cursor()
-
-        update_fields = []
-        update_values = []
-        for field, value in data.items():
-            update_fields.append(f"{field} = %s")
-            update_values.append(value)
-
-        update_query = f"UPDATE mine_info SET {', '.join(update_fields)} WHERE mine_id = %s"
-        update_values.append(mine_id)
-
-        cursor.execute(update_query, update_values)
-        conn.commit()
-
-        return jsonify({"message": "Mine partially updated successfully"}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -15,7 +15,7 @@ def fetch_plate_data():
     
     cursor.execute(
         """
-        SELECT * FROM vehicle_permit
+        SELECT * FROM plates
 
         """
     )

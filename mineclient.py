@@ -216,47 +216,47 @@ def get_db_connection():
     return conn
 
 # Function to send data to another server
-def send_data_to_server():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM plates WHERE sent = FALSE LIMIT 10;")  # Get unsent records
-        plates = cursor.fetchall()
+# def send_data_to_server():
+#     try:
+#         conn = get_db_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("SELECT * FROM plates WHERE sent = FALSE LIMIT 10;")  # Get unsent records
+#         plates = cursor.fetchall()
 
-        if plates:
-            for plate in plates:
-                plate_id, date, raw_image, plate_image, predicted_string, camera_id,_,valid = plate
-                data = {
-                    "id": plate_id,
-                    "date": date,
-                    "raw_image": raw_image,
-                    "plate_image": plate_image,
-                    "predicted_string": predicted_string,
-                    "camera_id": camera_id,
-                    'permit':valid
-                }
+#         if plates:
+#             for plate in plates:
+#                 plate_id, date, raw_image, plate_image, predicted_string, camera_id,_,valid = plate
+#                 data = {
+#                     "id": plate_id,
+#                     "date": date,
+#                     "raw_image": raw_image,
+#                     "plate_image": plate_image,
+#                     "predicted_string": predicted_string,
+#                     "camera_id": camera_id,
+#                     'permit':valid
+#                 }
                 
-                success = False
-                while not success:
-                    try:
-                        response = requests.post("http://127.0.0.1:5000/process_data", json=data)
-                        if response.status_code == 200:
-                            success = True
-                            cursor.execute("UPDATE plates SET sent = TRUE WHERE id = %s", (plate_id,))
-                            conn.commit()
-                        else:
-                            # If the response is not OK, wait and retry
-                            print(f"Error: Received status code {response.status_code} for plate {plate_id}. Retrying...")
-                            time.sleep(10)  # Wait 10 seconds before retrying
-                    except requests.exceptions.RequestException as e:
-                        print(f"Error sending data: {e}. Retrying...")
-                        time.sleep(10)  # Wait 10 seconds before retrying
+#                 success = False
+#                 while not success:
+#                     try:
+#                         response = requests.post("http://127.0.0.1:5000/process_data", json=data)
+#                         if response.status_code == 200:
+#                             success = True
+#                             cursor.execute("UPDATE plates SET sent = TRUE WHERE id = %s", (plate_id,))
+#                             conn.commit()
+#                         else:
+#                             # If the response is not OK, wait and retry
+#                             print(f"Error: Received status code {response.status_code} for plate {plate_id}. Retrying...")
+#                             time.sleep(10)  # Wait 10 seconds before retrying
+#                     except requests.exceptions.RequestException as e:
+#                         print(f"Error sending data: {e}. Retrying...")
+#                         time.sleep(10)  # Wait 10 seconds before retrying
                 
-        cursor.close()
-        conn.close()
+#         cursor.close()
+#         conn.close()
     
-    except Exception as e:
-        print(f"Error in sending data to server: {e}")
+#     except Exception as e:
+#         print(f"Error in sending data to server: {e}")
 
 # Function to schedule sending data every 5 minutes
 def schedule_data_transfer():
@@ -325,4 +325,4 @@ def main():
         video_thread.join()
 
 if __name__ == "__main__":
-    main()    
+    main()
