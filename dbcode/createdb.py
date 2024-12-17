@@ -307,7 +307,6 @@ def create_mine_info_table():
             CREATE TABLE IF NOT EXISTS mine_info (
                 mine_id SERIAL PRIMARY KEY,  -- Auto-incrementing ID for each mine
                 mine_name VARCHAR(100), 
-                cameraid VARCHAR(100),  
                 location VARCHAR(100),  -- Location of the mine
                 owner_name VARCHAR(100),  -- Owner's name of the mine
                 contact_number VARCHAR(15)  -- Contact number for the mine
