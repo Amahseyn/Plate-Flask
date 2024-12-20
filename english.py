@@ -569,10 +569,11 @@ def get_penalties():
         # Fetch predicted_string from plates based on platename
         plate_query = "SELECT predicted_string FROM plates WHERE id = %s"
 
-        # Format the result
+
         penalties_list = []
         for row in penalties:
             platename = row[1]
+
             cursor.execute(plate_query, (platename,))
             plate_result = cursor.fetchone()
             predicted_string = plate_result[0] if plate_result else None

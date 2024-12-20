@@ -26,5 +26,5 @@ def reverse_geocode(lat, lon):
 latitude = 35.73247
 longitude = 51.42268
 
-# Call the function
-reverse_geocode(latitude, longitude)
+for x in range(5):
+    reverse_geocode(latitude, longitude)

@@ -2,7 +2,7 @@ import eventlet
 eventlet.monkey_patch()
 from flask import Flask, Response, send_file, jsonify,send_from_directory
 from psycopg2.extras import RealDictCursor
-
+from readsensor import *
 # import socket
 # import json
 from psycopg2 import sql, OperationalError, DatabaseError
@@ -213,7 +213,7 @@ def video_feed(cameraId):
                 return jsonify({"error": "Camera not found"}), 404
 
             camera_link = camera_link[0]  # Extract link from tuple
-            camera_link = "a09.mp4"
+            camera_link = 'http://admin:Maziar123@192.168.1.11/cgi-bin/mjpeg'
             # Open video stream
             cap = cv2.VideoCapture(camera_link)
             width, height = 1280, 720
@@ -525,7 +525,7 @@ def get_penalties():
 
         # Base query
         base_query = """
-        SELECT id, platename, penaltytype, location, datetime, rawimagepth, plateimagepath
+        SELECT id, platename, penaltytype, location, datetime, rawimagepath, plateimagepath
         FROM penalties
         """
         where_clause = []
@@ -567,11 +567,11 @@ def get_penalties():
         # Format the result
         penalties_list = []
         for row in penalties:
-            plateid = row[0]
+            plateid = row[1]
             cursor.execute(plate_query, (plateid,))
             plate_result = cursor.fetchone()
             predicted_string = plate_result[0] if plate_result else None
-
+            #print(f"predictedstring:{predicted_string}")
             penalties_list.append({
                 "id": row[0],
                 "platename": predicted_string,  # Replace platename with predicted_string
@@ -648,6 +648,7 @@ def add_penalty():
         platename = data['id']
         penaltytype = data['penaltytype']
         location = data['location']
+
         
         # Get the last raw image path from the plates table based on platename
         result = get_last_raw_image_path(platename)
@@ -665,7 +666,7 @@ def add_penalty():
 
         # Insert data into the 'penalties' table
         query = """
-        INSERT INTO penalties (platename, penaltytype, location, datetime, rawimagepth, plateimagepath)
+        INSERT INTO penalties (platename, penaltytype, location, datetime, rawimagepath, plateimagepath)
         VALUES (%s, %s, %s, %s, %s, %s);
         """
         cur.execute(query, (platename, penaltytype, location, current_time, result[0], result[1]))  # Using result[1] for plateimagepath
@@ -683,8 +684,11 @@ def add_penalty():
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-
-# PUT: Update a penalty record
+@app.route('/location', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def returnlocation():
+        location = read_location_from_com3()
+        return jsonify({'location': location}), 200
 @app.route('/penalty/<int:id>', methods=['PUT'])
 @cross_origin(supports_credentials=True)
 def update_penalty(id):
@@ -745,7 +749,7 @@ def get_penalty_by_id(penalty_id):
         # Query the database for the specific penalty by ID
         cursor.execute(
             """
-            SELECT id, platename, penaltytype, location, datetime, rawimagepth
+            SELECT id, platename, penaltytype, location, datetime, rawimagepath
             FROM penalties
             WHERE id = %s
             """,
