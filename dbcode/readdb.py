@@ -15,7 +15,7 @@ def fetch_plate_data():
     
     cursor.execute(
         """
-        SELECT * FROM mine_info
+        SELECT * FROM vehicle_info
 
         """
     )
