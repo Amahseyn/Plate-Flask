@@ -44,7 +44,7 @@ def droptable():
         cursor = conn.cursor()
 
         # Create the 'cameras' table
-        cursor.execute("""Drop TABLE IF EXISTS mine_info""")
+        cursor.execute("""Drop TABLE IF EXISTS vehicle_info""")
         conn.commit()
         print("Table droped successfully.")
 
@@ -191,30 +191,7 @@ def insert_test_camera():
         if conn:
             cursor.close()
             conn.close()
-def insert_test_penalty():
-    """
-    Insert test data into the 'penalties' table.
-    """
-    try:
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        cursor = conn.cursor()
-        current_time = datetime.now()
-        datetime_value = str(current_time.strftime("%Y-%m-%d-%H-%M-%S"))
-        print(datetime_value)
-        # Insert test penalty data
-        cursor.execute("""
-            INSERT INTO penalties (platename, penaltytype, location, datetime, rawimagepth, plateimagepath)
-            VALUES (%s, %s, %s, %s, %s,%s)
-        """, ("AK48", "test", "location5", "2024-12-05-17-54-54", "/images/raw5.jpg","images/plt.png"))
 
-        conn.commit()
-        print("Test penalty data inserted successfully.")
-    except Exception as e:
-        print(f"Error inserting test penalty data: {e}")
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
 def create_permits_table():
     """
     Create a combined table 'vehicle_permit' with auto-incrementing vehicle_id starting from 0.
@@ -227,12 +204,12 @@ def create_permits_table():
         # Create the 'vehicle_info' table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS vehicle_info (
-                vehicle_id SERIAL PRIMARY KEY,  -- Auto-incrementing ID
+                vehicle_id SERIAL PRIMARY KEY,
                 license_plate VARCHAR(20) UNIQUE NOT NULL,
                 owner_name VARCHAR(100),
                 organization VARCHAR(100),
                 contact_number VARCHAR(15),
-                plate_image TEXT;
+                plate_image TEXT
                        
 
             )
@@ -378,9 +355,10 @@ def remove_columns():
 
 # Example usage
 if __name__ == "__main__":
-    #droptable()
+    droptable()
     #create_plates_table()
     #create_mine_info_table()
-    remove_columns()
-    add_columns_to_vehicle_table()
+    #remove_columns()
+    #add_columns_to_vehicle_table()
+    create_permits_table()
 
