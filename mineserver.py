@@ -361,6 +361,78 @@ def get_all_plates():
 def get_db_connection():
     conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
     return conn
+@app.route('/vehicle', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def get_vehicles():
+    try:
+        # Extract query parameters
+        page = int(request.args.get('page', 1))  # Default to page 1 if not provided
+        limit = int(request.args.get('limit', 10))  # Default limit is 10
+        search = request.args.get('search', '')  # Search query (default empty)
+
+        # If page is 0, return all records
+        if page == 0:
+            query = """
+                SELECT * FROM vehicle_info
+                WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s;
+            """
+            search_term = f"%{search}%"
+
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+
+            cur.execute(query, (search_term, search_term, search_term))
+            all_records = cur.fetchall()
+
+            count_query = """
+                SELECT COUNT(*) FROM vehicle_info
+                WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s;
+            """
+            cur.execute(count_query, (search_term, search_term, search_term))
+            total_count = cur.fetchone()['count']
+
+            cur.close()
+            conn.close()
+
+            return jsonify({
+                'data': all_records,
+                'total_count': total_count
+            }), 200
+
+        # Otherwise, apply pagination
+        offset = (page - 1) * limit
+        query = """
+            SELECT * FROM vehicle_info
+            WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s
+            LIMIT %s OFFSET %s;
+        """
+        count_query = """
+            SELECT COUNT(*) FROM vehicle_info
+            WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s;
+        """
+        search_term = f"%{search}%"
+
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # Execute the queries
+        cur.execute(query, (search_term, search_term, search_term, limit, offset))
+        records = cur.fetchall()
+
+        cur.execute(count_query, (search_term, search_term, search_term))
+        total_count = cur.fetchone()['count']
+
+        cur.close()
+        conn.close()
+
+        # Return the data with pagination info
+        return jsonify({
+            'data': records,
+            'total_count': total_count
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 @app.route('/vehicle', methods=['POST'])
 def create_vehicle():
@@ -499,27 +571,6 @@ def patch_vehicle(vehicle_id):
         cursor.close()
         conn.close()
 
-@app.route('/vehicle/<int:vehicle_id>', methods=['DELETE'])
-def delete_vehicle(vehicle_id):
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        # Delete vehicle_info
-        cursor.execute("DELETE FROM vehicle_info WHERE vehicle_id = %s", (vehicle_id,))
-
-        if cursor.rowcount == 0:
-            return jsonify({"error": "Vehicle not found"}), 404
-
-        conn.commit()
-        return jsonify({"message": "Vehicle deleted successfully"}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    finally:
-        cursor.close()
-        conn.close()
 ### POST: Add a new mine record ###
 @app.route('/mine', methods=['POST'])
 @cross_origin(supports_credentials=True)
