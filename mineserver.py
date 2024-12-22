@@ -361,78 +361,187 @@ def get_all_plates():
 def get_db_connection():
     conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
     return conn
-@app.route('/vehicle', methods=['GET'])
+@app.route('/daily_traffic', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def get_vehicles():
+def get_daily_traffic():
     try:
-        # Extract query parameters
-        page = int(request.args.get('page', 1))  # Default to page 1 if not provided
-        limit = int(request.args.get('limit', 10))  # Default limit is 10
-        search = request.args.get('search', '')  # Search query (default empty)
+        # Get query parameters
+        time1 = request.args.get('time1')
+        time2 = request.args.get('time2')
 
-        # If page is 0, return all records
-        if page == 0:
-            query = """
-                SELECT * FROM vehicle_info
-                WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s;
-            """
-            search_term = f"%{search}%"
+        # Validate input dates
+        if not time1 or not time2:
+            return jsonify({"error": "time1 and time2 are required"}), 400
 
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Ensure the input is in the correct format (YYYY-MM-DD)
+        try:
+            # Convert the input to datetime objects
+            time1 = datetime.strptime(time1, "%Y-%m-%d")
+            time2 = datetime.strptime(time2, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "Invalid date format. Use 'YYYY-MM-DD'"}), 400
 
-            cur.execute(query, (search_term, search_term, search_term))
-            all_records = cur.fetchall()
+        # Connect to the database
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        cursor = conn.cursor()
 
-            count_query = """
-                SELECT COUNT(*) FROM vehicle_info
-                WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s;
-            """
-            cur.execute(count_query, (search_term, search_term, search_term))
-            total_count = cur.fetchone()['count']
+        # Create a date series to ensure all dates in the range are included
+        date_series_query = """
+            SELECT generate_series(%s::date, %s::date, '1 day'::interval) AS traffic_date
+        """
+        
+        cursor.execute(date_series_query, (time1, time2))
+        date_series = cursor.fetchall()
 
-            cur.close()
+        # Query to count the daily traffic using string comparison
+        query = """
+            SELECT 
+                SUBSTRING(date, 1, 10) AS traffic_date,  -- Extract the date part from the string
+                COUNT(*) AS count
+            FROM plates
+            WHERE SUBSTRING(date, 1, 10) BETWEEN %s AND %s
+            GROUP BY traffic_date
+            ORDER BY traffic_date;
+        """
+        
+        cursor.execute(query, (time1.strftime("%Y-%m-%d"), time2.strftime("%Y-%m-%d")))
+        results = cursor.fetchall()
+
+        # Combine the date series with results, ensuring all dates in the range are included
+        daily_traffic = []
+        result_dates = {row[0]: row[1] for row in results}
+
+        for date in date_series:
+            date_str = str(date[0].date())  # Get only the date part
+            count = result_dates.get(date_str, 0)  # Default to 0 if date not in results
+            daily_traffic.append({"date": date_str, "count": count})
+
+        # Build the response
+        response = {
+            "start_date": time1.strftime("%Y-%m-%d"),
+            "end_date": time2.strftime("%Y-%m-%d"),
+            "daily_traffic": daily_traffic
+        }
+
+        return jsonify(response), 200
+
+    except OperationalError as db_err:
+        return jsonify({"error": f"Database connection failed: {db_err}"}), 500
+    except DatabaseError as sql_err:
+        return jsonify({"error": f"SQL error: {sql_err}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Unexpected error: {e}"}), 500
+    finally:
+        # Ensure cursor and connection are closed safely
+        if 'cursor' in locals():
+            cursor.close()
+        if 'conn' in locals():
             conn.close()
 
-            return jsonify({
-                'data': all_records,
-                'total_count': total_count
-            }), 200
 
-        # Otherwise, apply pagination
-        offset = (page - 1) * limit
-        query = """
-            SELECT * FROM vehicle_info
-            WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s
-            LIMIT %s OFFSET %s;
+@app.route('/vehicle', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def get_all_vehicles():
+    try:
+        # Get query parameters
+        page = request.args.get('page', type=int, default=1)
+        limit = request.args.get('limit', type=int, default=10)
+
+        # Dynamic filters
+        filters = []
+        params = []
+
+        # Add dynamic filters based on input arguments
+        if 'license_plate' in request.args:
+            search_value = request.args.get('license_plate').lower().replace('-', '')
+            filters.append("REPLACE(LOWER(license_plate), '-', '') LIKE %s")
+            params.append(f"%{search_value}%")
+
+        if 'owner_name' in request.args:
+            filters.append("LOWER(owner_name) LIKE %s")
+            params.append(f"%{request.args.get('owner_name').lower()}%")
+
+        if 'organization' in request.args:
+            filters.append("LOWER(organization) LIKE %s")
+            params.append(f"%{request.args.get('organization').lower()}%")
+
+        # Connect to the database
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        cursor = conn.cursor()
+
+        # Build the base query
+        base_query = """
+            SELECT vehicle_id, license_plate, owner_name, organization, contact_number, plate_image
+            FROM vehicle_info
         """
-        count_query = """
-            SELECT COUNT(*) FROM vehicle_info
-            WHERE license_plate ILIKE %s OR owner_name ILIKE %s OR organization ILIKE %s;
-        """
-        search_term = f"%{search}%"
 
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Add WHERE clause if there are filters
+        if filters:
+            base_query += " WHERE " + " AND ".join(filters)
 
-        # Execute the queries
-        cur.execute(query, (search_term, search_term, search_term, limit, offset))
-        records = cur.fetchall()
+        # Fetch the total count with filters
+        count_query = "SELECT COUNT(*) FROM vehicle_info"
+        if filters:
+            count_query += " WHERE " + " AND ".join(filters)
 
-        cur.execute(count_query, (search_term, search_term, search_term))
-        total_count = cur.fetchone()['count']
+        cursor.execute(count_query, tuple(params))
+        total_count = cursor.fetchone()[0]
 
-        cur.close()
-        conn.close()
+        # Handle pagination or fetch all records
+        if page == 0:
+            # Fetch all records without pagination
+            query = base_query + " ORDER BY vehicle_id DESC"
+            cursor.execute(query, tuple(params))
+        else:
+            # Fetch records with pagination
+            offset = (page - 1) * limit
+            query = base_query + " ORDER BY vehicle_id LIMIT %s OFFSET %s"
+            cursor.execute(query, tuple(params) + (limit, offset))
+        vehicles = cursor.fetchall()
 
-        # Return the data with pagination info
-        return jsonify({
-            'data': records,
-            'total_count': total_count
-        }), 200
+        # Format the results
+        vehicles_list = []
+        for row in vehicles:
+            vehicles_list.append({
+                "vehicle_id": row[0],
+                "license_plate": row[1],
+                "owner_name": row[2],
+                "organization": row[3],
+                "contact_number": row[4],
+                "plate_image": row[5],
+            })
 
+        # Build the response
+        response = {
+            "count": total_count,
+            "vehicles": vehicles_list,
+        }
+
+        return jsonify(response), 200
+
+    except psycopg2.OperationalError as db_err:
+        return jsonify({"error": f"Database connection failed: {db_err}"}), 500
+    except psycopg2.DatabaseError as sql_err:
+        return jsonify({"error": f"SQL error: {sql_err}"}), 500
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        return jsonify({"error": f"Unexpected error: {e}"}), 500
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
+            conn.close()
 
 @app.route('/vehicle', methods=['POST'])
 def create_vehicle():
@@ -951,13 +1060,28 @@ def delete_vehicle_permit(permit_id):
 def get_vehicle_permits():
     try:
         # Get query parameters
-        page = request.args.get('page', 1, type=int)
-        limit = request.args.get('limit', 10, type=int)
-        license_plate = request.args.get('license_plate', '')
+        page = request.args.get('page', type=int, default=1)
+        limit = request.args.get('limit', type=int, default=10)
+        license_plate = request.args.get('license_plate', '').lower().replace('-', '')
+
+        # Dynamic filters
+        filters = []
+        params = []
+
+        # Add filter for license_plate if provided
+        if license_plate:
+            filters.append("REPLACE(LOWER(vi.license_plate), '-', '') LIKE %s")
+            params.append(f"%{license_plate}%")
 
         # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # Base query to fetch permits with mine_name
         base_query = """
@@ -973,6 +1097,12 @@ def get_vehicle_permits():
             JOIN 
                 mine_info mi ON vp.mine_id = mi.mine_id
         """
+
+        # Build WHERE clause if filters are present
+        if filters:
+            base_query += " WHERE " + " AND ".join(filters)
+
+        # Fetch the total count with filters
         count_query = """
             SELECT COUNT(*)
             FROM 
@@ -982,33 +1112,27 @@ def get_vehicle_permits():
             JOIN 
                 mine_info mi ON vp.mine_id = mi.mine_id
         """
-        where_clause = ""
-        params = []
+        if filters:
+            count_query += " WHERE " + " AND ".join(filters)
 
-        # Filter by license_plate if provided
-        if license_plate:
-            where_clause = "WHERE vi.license_plate ILIKE %s"
-            params.append(f"%{license_plate}%")
+        cursor.execute(count_query, tuple(params))
+        total_count = cursor.fetchone()['count']
 
-        # Add pagination or fetch all records
+        # Handle pagination or fetch all records
         if page == 0:
-            query = f"{base_query} {where_clause} ORDER BY permit_id DESC;"
-            count_query = f"{count_query} {where_clause};"
+            # Fetch all records without pagination
+            query = base_query + " ORDER BY vp.permit_id DESC"
+            cursor.execute(query, tuple(params))
         else:
+            # Fetch records with pagination
             offset = (page - 1) * limit
-            query = f"{base_query} ORDER BY permit_id DESC {where_clause} LIMIT %s OFFSET %s ;"
-            params.extend([limit, offset])
+            query = base_query + " ORDER BY vp.permit_id DESC LIMIT %s OFFSET %s"
+            cursor.execute(query, tuple(params) + (limit, offset))
 
-        # Execute the query
-        cur.execute(query, tuple(params))
-        records = cur.fetchall()
-
-        # Execute count query
-        cur.execute(count_query, tuple(params[:1]))
-        total_count = cur.fetchone()['count']
+        records = cursor.fetchall()
 
         # Close database connection
-        cur.close()
+        cursor.close()
         conn.close()
 
         # Return response
@@ -1019,10 +1143,12 @@ def get_vehicle_permits():
             'limit': limit if page != 0 else total_count
         }), 200
 
+    except psycopg2.OperationalError as db_err:
+        return jsonify({'error': f'Database connection failed: {db_err}'}), 500
+    except psycopg2.DatabaseError as sql_err:
+        return jsonify({'error': f'SQL error: {sql_err}'}), 500
     except Exception as e:
-        # Handle errors
-        return jsonify({'error': str(e)}), 400
-
+        return jsonify({'error': f'Unexpected error: {e}'}), 500
 
 @app.route('/images/<path:filename>')
 @cross_origin(supports_credentials=True)
