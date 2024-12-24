@@ -231,7 +231,7 @@ plate_images_dir = os.path.join(images_dir, 'plate')
 #                 if not ret:
 #                     print("No frames read. Exiting...")
 #                     break
-#                 img = cv2.resize(img,(width,height))
+#  
 #                 processed_frame = process_frame(img,cameraId)
 
 #                 with lock:

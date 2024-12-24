@@ -5,6 +5,8 @@ from psycopg2.extras import RealDictCursor
 from readsensor import *
 # import socket
 # import json
+from torchvision import transforms
+
 from psycopg2 import sql, OperationalError, DatabaseError
 # import socket
 from flask import request, jsonify, send_file
@@ -23,6 +25,7 @@ import psycopg2
 import warnings
 import requests
 warnings.filterwarnings("ignore", category=FutureWarning)
+
 params = Parameters()
 from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
@@ -45,8 +48,8 @@ lock = threading.Lock()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
-model_object = YOLO("weights/best.pt")
-modelCharX = torch.hub.load('yolov5', 'custom', "model/CharsYolo.pt", source='local', force_reload=True)
+model_object = YOLO("weights/best.pt").to(device)
+modelCharX = torch.hub.load('yolov5', 'custom', "model/CharsYolo.pt", source='local', force_reload=True).to(device)
 
 font_path = "vazir.ttf"
 persian_font = ImageFont.truetype(font_path, 20)
@@ -54,7 +57,10 @@ dirpath = os.getcwd()
 images_dir = 'images'
 raw_images_dir = os.path.join(images_dir, 'raw')
 plate_images_dir = os.path.join(images_dir, 'plate')
-
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Resize((720, 1280)),  # Resize on GPU
+])
 
 def detectPlateChars(croppedPlate):
     """Detect characters on a cropped plate."""
@@ -174,13 +180,17 @@ def process_frame(img, cameraId):
                     last_detection_time[current_char_display] = current_time
                     
                     try:
+                        evenodd = False
+                        if char_display[6]%2==0:
+                            evenodd = True
                         data = {
                             "id": plate_id,  
                             "date": timestamp,
                             "raw_image_path": raw_url,
                             "plate_cropped_image_path": plate_url,
                             "predicted_string": englishoutput,
-                            "cameraid": cameraId
+                            "cameraid": cameraId,
+                            "evenodd":evenodd
                         }
 
                         # Emit the data via SocketIO with the ID from the database
@@ -196,15 +206,22 @@ def process_frame(img, cameraId):
     cv2.putText(img, fps_text, (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 50, 255), 2)
     return img
 
-@app.route('/camera/<int:cameraId>/stream', methods=['GET'])
+@app.route('/camera/<int:cameraId>/<int:mod>/stream', methods=['GET'])
 @cross_origin(supports_credentials=True)
-def video_feed(cameraId):
+def video_feed(cameraId, mod):
     def generate():
         global frame
+        conn = None
+        print(f"State is {mod}, Camera ID is {cameraId}")
+        vis =None
         try:
+            print(f"State is {mod}, Camera ID is {cameraId}")
+            if mod == 1:
+                vis = True
+
             conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
             cursor = conn.cursor()
-            #cameraId=1
+
             # Fetch the camera link based on the cameraId
             cursor.execute("SELECT cameralink FROM cameras WHERE id = %s", (cameraId,))
             camera_link = cursor.fetchone()
@@ -213,26 +230,23 @@ def video_feed(cameraId):
                 return jsonify({"error": "Camera not found"}), 404
 
             camera_link = camera_link[0]  # Extract link from tuple
-            camera_link = 'http://admin:Maziar123@192.168.1.11/cgi-bin/mjpeg'
-            # Open video stream
             cap = cv2.VideoCapture(camera_link)
-            width, height = 1280, 720
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = 10
-            cap.set(cv2.CAP_PROP_FPS, fps)
+
             if not cap.isOpened():
                 print(f"Failed to open video stream from {camera_link}")
                 return jsonify({"error": "Failed to open camera stream"}), 500
+
             while True:
                 ret, img = cap.read()
                 if not ret:
                     print("No frames read. Exiting...")
                     break
-                img = cv2.resize(img,(width,height))
-                processed_frame = process_frame(img,cameraId)
+
+                img = cv2.resize(img, (1280, 720))
+                if vis:
+                    processed_frame = process_frame(img, cameraId)
+                else:
+                    processed_frame = img
 
                 with lock:
                     frame = processed_frame
@@ -240,19 +254,27 @@ def video_feed(cameraId):
                 _, buffer = cv2.imencode('.jpg', frame)
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                time.sleep(0.05)
-            #cap.release()
+                time.sleep(0.01)
+
         except Exception as e:
+            print(f"Error: {str(e)}")
             return jsonify({"error": str(e)}), 500
         finally:
             if conn:
                 cursor.close()
                 conn.close()
 
-                            
-
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@socketio.on('connect')
+def handle_connect():
+    print("Client connected")
+
+@socketio.on('message')
+def handle_message(data):
+    print(f"Message received: {data}")
+    # Optionally, you can emit a response back
+    emit('response', {'status': 'Message received'})
 @app.route('/cameras', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_cameras():
@@ -265,7 +287,7 @@ def get_cameras():
 
 
         cameras_list = [
-            {"cameraname": row[0], "cameralocation": row[1], "cameralink": row[2]} for row in cameras
+            {"cameraname": row[0], "cameralocation": row[1], "cameralink": row[2],"cameraid":row[3]} for row in cameras
         ]
         return jsonify(cameras_list), 200
 
@@ -281,10 +303,10 @@ def get_cameras():
 @cross_origin(supports_credentials=True)
 def add_camera():
     from flask import request
-
+    conn = None
     try:
         data = request.get_json()
-        required_fields = ['cameraname', 'cameralocation', 'cameralink']
+        required_fields = ['cameraname', 'cameralocation', "cameralink"]
         for field in required_fields:
             if field not in data:
                 return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -292,6 +314,7 @@ def add_camera():
         cameraname = data['cameraname']
         cameralocation = data['cameralocation']
         cameralink = data['cameralink']
+        print(cameraname)
 
         conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
         cursor = conn.cursor()
@@ -317,7 +340,7 @@ def add_camera():
 @cross_origin(supports_credentials=True)
 def update_camera(cameraId):
     from flask import request
-
+    conn = None
     try:
         data = request.get_json()
         conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
@@ -354,6 +377,7 @@ def update_camera(cameraId):
 @app.route('/camera/<int:cameraId>', methods=['DELETE'])
 @cross_origin(supports_credentials=True)
 def delete_camera(cameraId):
+    conn = None
     try:
         conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
         cursor = conn.cursor()
@@ -373,6 +397,7 @@ def delete_camera(cameraId):
 @app.route('/license', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_license_data():
+    conn = None
     try:
         license_string = request.args.get('license')
         if not license_string:
@@ -410,6 +435,7 @@ def get_license_data():
 @app.route('/plates', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_all_plates():
+    conn = None
     try:
         # Get query parameters
         page = request.args.get('page', type=int, default=1)
@@ -445,7 +471,7 @@ def get_all_plates():
 
         # Build the base query
         base_query = """
-            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path,valid
+            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path,camera_id
             FROM plates
         """
 
@@ -481,7 +507,7 @@ def get_all_plates():
                 "predicted_string": row[2],
                 "raw_image_path": row[3],
                 "cropped_plate_path": row[4],
-                "permit":row[5]
+                "cameraid":row[5]
             }
             for row in plates
         ]
@@ -512,6 +538,7 @@ def get_db_connection():
 @app.route('/penalties', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_penalties():
+    conn = None
     try:
         # Get query parameters
         page = request.args.get('page', type=int, default=1)
@@ -610,6 +637,7 @@ def get_penalties():
 
 # POST: Add a penalty
 def get_last_raw_image_path(platename):
+    conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -642,6 +670,7 @@ def get_last_raw_image_path(platename):
 @app.route('/penalty', methods=['POST'])
 @cross_origin(supports_credentials=True)
 def add_penalty():
+    conn = None
     try:
         # Extract data from the incoming request
         data = request.get_json()
@@ -692,6 +721,7 @@ def returnlocation():
 @app.route('/penalty/<int:id>', methods=['PUT'])
 @cross_origin(supports_credentials=True)
 def update_penalty(id):
+    conn = None
     try:
         # Extract data from the incoming request
         data = request.get_json()
@@ -741,6 +771,7 @@ def update_penalty(id):
 @app.route('/penalty/<int:penalty_id>', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_penalty_by_id(penalty_id):
+    conn = None
     try:
         # Connect to the database
         conn = get_db_connection()
@@ -790,6 +821,7 @@ def get_penalty_by_id(penalty_id):
 @app.route('/penalty/<int:id>', methods=['DELETE'])
 @cross_origin(supports_credentials=True)
 def delete_penalty(id):
+    conn = None
     try:
         # Connect to the database
         conn = get_db_connection()
@@ -817,6 +849,7 @@ def delete_penalty(id):
 @app.route('/penalty/<int:id>', methods=['PATCH'])
 @cross_origin(supports_credentials=True)
 def patch_penalty(id):
+    conn = None
     try:
         # Extract data from the incoming request
         data = request.get_json()
@@ -887,457 +920,6 @@ def patch_penalty(id):
         print("Error occurred:", traceback.format_exc())
         return jsonify({'error': str(e)}), 400
 
-### POST: Add a new mine record ###
-@app.route('/mine', methods=['POST'])
-@cross_origin(supports_credentials=True)
-def create_mine():
-    data = request.json
-    try:
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO mine_info (mine_name, cameraid, location, owner_name, contact_number)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING mine_id
-        """, (data['mine_name'], data['cameraid'], data.get('location'), data.get('owner_name'), data.get('contact_number')))
-        mine_id = cursor.fetchone()[0]
-        conn.commit()
-
-        return jsonify({"message": "Mine created successfully", "mine_id": mine_id}), 201
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
-
-
-@app.route('/mine/<int:mine_id>', methods=['PUT'])
-@cross_origin(supports_credentials=True)
-def update_mine(mine_id):
-    data = request.json
-    try:
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            UPDATE mine_info
-            SET mine_name = %s, cameraid = %s, location = %s, owner_name = %s, contact_number = %s
-            WHERE mine_id = %s
-        """, (data['mine_name'], data['cameraid'], data.get('location'), data.get('owner_name'), data.get('contact_number'), mine_id))
-        conn.commit()
-
-        return jsonify({"message": "Mine updated successfully"}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
-
-
-@app.route('/mine/<int:mine_id>', methods=['PATCH'])
-@cross_origin(supports_credentials=True)
-def patch_mine(mine_id):
-    try:
-        # Extract data from the request
-        data = request.get_json()
-
-        # Build the query dynamically based on the provided fields
-        fields = []
-        values = []
-        for key, value in data.items():
-            fields.append(f"{key} = %s")
-            values.append(value)
-
-        # Ensure at least one field is provided
-        if not fields:
-            return jsonify({'error': 'No fields to update provided'}), 400
-
-        values.append(mine_id)  # Add mine_id for the WHERE clause
-        query = f"UPDATE mine_info SET {', '.join(fields)} WHERE mine_id = %s;"
-
-        # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Execute the query
-        cur.execute(query, values)
-
-        # Commit the transaction
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        # Return success response
-        return jsonify({'message': 'Mine partially updated successfully'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-@app.route('/mine', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def get_mines():
-    try:
-        # Extract query parameters
-        page = int(request.args.get('page', 1))  # Default to page 1 if not provided
-        limit = int(request.args.get('limit', 10))  # Default limit is 10
-        search = request.args.get('search', '')  # Search query (default empty)
-
-        # If page is 0, return all records
-        if page == 0:
-            query = """
-                SELECT * FROM mine_info
-                WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s;
-            """
-            search_term = f"%{search}%"
-
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-
-            cur.execute(query, (search_term, search_term, search_term))
-            all_records = cur.fetchall()
-            count_query = "SELECT COUNT(*) FROM mine_info WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s;"
-            cur.execute(count_query, (search_term, search_term, search_term))
-            total_count = cur.fetchone()['count']
-
-            cur.close()
-            conn.close()
-
-            return jsonify({
-                'data': all_records,
-                'total_count': total_count
-            }), 200
-
-        # Otherwise, apply pagination
-        offset = (page - 1) * limit
-        query = """
-            SELECT * FROM mine_info
-            WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s
-            LIMIT %s OFFSET %s;
-        """
-        count_query = """
-            SELECT COUNT(*) FROM mine_info
-            WHERE mine_name ILIKE %s OR location ILIKE %s OR owner_name ILIKE %s;
-        """
-        search_term = f"%{search}%"
-
-        # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # Execute the queries
-        cur.execute(query, (search_term, search_term, search_term, limit, offset))
-        records = cur.fetchall()
-
-        cur.execute(count_query, (search_term, search_term, search_term))
-        total_count = cur.fetchone()['count']
-
-        cur.close()
-        conn.close()
-
-        # Return the data with pagination info
-        return jsonify({
-            'data': records,
-            'total_count': total_count
-        }), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-### DELETE: Remove a mine record ###
-@app.route('/mine/<int:mine_id>', methods=['DELETE'])
-@cross_origin(supports_credentials=True)
-def delete_mine(mine_id):
-    try:
-        # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Delete the record from the mine_info table
-        query = "DELETE FROM mine_info WHERE mine_id = %s;"
-        cur.execute(query, (mine_id,))
-
-        # Commit the transaction
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        # Return success response
-        return jsonify({'message': 'Mine deleted successfully'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/permit', methods=['POST'])
-@cross_origin(supports_credentials=True)
-def add_vehicle_permit():
-    try:
-        data = request.get_json()
-        license_plate = data['license_plate']
-        mine_id = data['mine_id']
-        start_date = data['start_date']
-        end_date = data['end_date']
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Insert or fetch vehicle_id from vehicle_info
-        cur.execute(
-            """
-            INSERT INTO vehicle_info (license_plate)
-            VALUES (%s)
-            ON CONFLICT (license_plate) DO NOTHING
-            RETURNING vehicle_id;
-            """,
-            (license_plate,)
-        )
-        result = cur.fetchone()
-        if result is None:
-            cur.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
-            vehicle_id = cur.fetchone()[0]
-        else:
-            vehicle_id = result[0]
-
-        # Insert data into vehicle_permit
-        cur.execute(
-            """
-            INSERT INTO vehicle_permit (vehicle_id, mine_id, start_date, end_date)
-            VALUES (%s, %s, %s, %s);
-            """,
-            (vehicle_id, mine_id, start_date, end_date)
-        )
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({'message': 'Vehicle permit added successfully'}), 201
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-### PUT: Update a vehicle permit ###
-@app.route('/permit/<int:permit_id>', methods=['PUT'])
-@cross_origin(supports_credentials=True)
-def update_vehicle_permit(permit_id):
-    try:
-        data = request.get_json()
-        license_plate = data['license_plate']
-        mine_id = data['mine_id']
-        start_date = data['start_date']
-        end_date = data['end_date']
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Fetch the current vehicle_id linked to the permit
-        cur.execute(
-            """
-            SELECT vehicle_id 
-            FROM vehicle_permit
-            WHERE permit_id = %s;
-            """,
-            (permit_id,)
-        )
-        result = cur.fetchone()
-        if not result:
-            return jsonify({'error': 'Permit ID not found'}), 404
-
-        current_vehicle_id = result[0]
-
-        # Check if the new license_plate exists in vehicle_info, or add it
-        cur.execute(
-            """
-            INSERT INTO vehicle_info (license_plate)
-            VALUES (%s)
-            ON CONFLICT (license_plate) DO NOTHING
-            RETURNING vehicle_id;
-            """,
-            (license_plate,)
-        )
-        result = cur.fetchone()
-        if result:
-            new_vehicle_id = result[0]
-        else:
-            # Fetch the vehicle_id for the existing license_plate
-            cur.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
-            new_vehicle_id = cur.fetchone()[0]
-
-        # Update the vehicle_permit with the new vehicle_id and other details
-        cur.execute(
-            """
-            UPDATE vehicle_permit
-            SET vehicle_id = %s, mine_id = %s, start_date = %s, end_date = %s
-            WHERE permit_id = %s;
-            """,
-            (new_vehicle_id, mine_id, start_date, end_date, permit_id)
-        )
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({'message': 'Vehicle permit updated successfully'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-### PATCH: Partially update a vehicle permit ###
-@app.route('/permit/<int:permit_id>', methods=['PATCH'])
-@cross_origin(supports_credentials=True)
-def patch_vehicle_permit(permit_id):
-    try:
-        data = request.get_json()
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Check if license_plate is in the data
-        if 'license_plate' in data:
-            license_plate = data.pop('license_plate')
-
-            # Insert or fetch vehicle_id from vehicle_info
-            cur.execute(
-                """
-                INSERT INTO vehicle_info (license_plate)
-                VALUES (%s)
-                ON CONFLICT (license_plate) DO NOTHING
-                RETURNING vehicle_id;
-                """,
-                (license_plate,)
-            )
-            result = cur.fetchone()
-            if result:
-                vehicle_id = result[0]
-            else:
-                # Fetch the vehicle_id for the existing license_plate
-                cur.execute("SELECT vehicle_id FROM vehicle_info WHERE license_plate = %s", (license_plate,))
-                vehicle_id = cur.fetchone()[0]
-
-            # Add vehicle_id to the update fields
-            data['vehicle_id'] = vehicle_id
-
-        # Dynamically build the query based on provided fields
-        fields = []
-        values = []
-        for key, value in data.items():
-            fields.append(f"{key} = %s")
-            values.append(value)
-
-        values.append(permit_id)
-        query = f"UPDATE vehicle_permit SET {', '.join(fields)} WHERE permit_id = %s;"
-
-        cur.execute(query, tuple(values))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({'message': 'Vehicle permit updated successfully'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-
-### DELETE: Remove a vehicle permit ###
-@app.route('/permit/<int:permit_id>', methods=['DELETE'])
-@cross_origin(supports_credentials=True)
-def delete_vehicle_permit(permit_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Delete the vehicle_permit
-        cur.execute("DELETE FROM vehicle_permit WHERE permit_id = %s;", (permit_id,))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({'message': 'Vehicle permit deleted successfully'}), 200
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-@app.route('/permit', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def get_vehicle_permits():
-    try:
-        # Get query parameters
-        page = request.args.get('page', 1, type=int)
-        limit = request.args.get('limit', 10, type=int)
-        license_plate = request.args.get('license_plate', '')
-
-        # Connect to the database
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        # Base query to fetch permits with mine_name
-        base_query = """
-            SELECT 
-                vp.*, 
-                vi.license_plate, 
-                mi.mine_id, 
-                mi.mine_name
-            FROM 
-                vehicle_permit vp
-            JOIN 
-                vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
-            JOIN 
-                mine_info mi ON vp.mine_id = mi.mine_id
-        """
-        count_query = """
-            SELECT COUNT(*)
-            FROM 
-                vehicle_permit vp
-            JOIN 
-                vehicle_info vi ON vp.vehicle_id = vi.vehicle_id
-            JOIN 
-                mine_info mi ON vp.mine_id = mi.mine_id
-        """
-        where_clause = ""
-        params = []
-
-        # Filter by license_plate if provided
-        if license_plate:
-            where_clause = "WHERE vi.license_plate ILIKE %s"
-            params.append(f"%{license_plate}%")
-
-        # Add pagination or fetch all records
-        if page == 0:
-            query = f"{base_query} {where_clause} ORDER BY permit_id DESC;"
-            count_query = f"{count_query} {where_clause};"
-        else:
-            offset = (page - 1) * limit
-            query = f"{base_query} ORDER BY permit_id DESC {where_clause} LIMIT %s OFFSET %s ;"
-            params.extend([limit, offset])
-
-        # Execute the query
-        cur.execute(query, tuple(params))
-        records = cur.fetchall()
-
-        # Execute count query
-        cur.execute(count_query, tuple(params[:1]))
-        total_count = cur.fetchone()['count']
-
-        # Close database connection
-        cur.close()
-        conn.close()
-
-        # Return response
-        return jsonify({
-            'data': records,
-            'total_count': total_count,
-            'page': page,
-            'limit': limit if page != 0 else total_count
-        }), 200
-
-    except Exception as e:
-        # Handle errors
-        return jsonify({'error': str(e)}), 400
 
 
 @app.route('/images/<path:filename>')
