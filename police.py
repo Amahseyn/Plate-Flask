@@ -853,6 +853,10 @@ def update_configuration():
             camera_id = camera.get('id')
             cameralink = camera.get('cameralink')
             if camera_id and cameralink:
+                cursor.execute("SELECT id FROM cameras WHERE id = %s", (camera_id,))
+                if cursor.fetchone() is None:
+                    return jsonify({'error': f'Camera with ID {camera_id} not found'}), 404
+
                 cursor.execute("UPDATE cameras SET cameralink = %s WHERE id = %s", (cameralink, camera_id))
 
         # Commit the changes
@@ -866,6 +870,7 @@ def update_configuration():
         if conn:
             cursor.close()
             conn.close()
+
 
 @app.route('/location', methods=['GET'])
 @cross_origin(supports_credentials=True)
@@ -894,12 +899,14 @@ def add_penalty():
         platename = data['id']
         penaltytype = data['penaltytype']
         location = data['location']
-
+        actualplate= data.get('predicted_string') if data else None
         # Connect to the database
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT predicted_string FROM plates WHERE id = %s ORDER BY id DESC LIMIT 1", (platename,))
-        plate = cur.fetchone()
+        plate = actualplate
+        if plate == None:
+            cur.execute("SELECT predicted_string FROM plates WHERE id = %s ORDER BY id DESC LIMIT 1", (platename,))
+            plate = cur.fetchone()
         # Check the last penalty timestamp for this platename
         cur.execute("SELECT datetime FROM penalties WHERE predicted_string = %s ORDER BY id DESC LIMIT 1", (plate,))
         last_penalty = cur.fetchone()
