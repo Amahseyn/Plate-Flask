@@ -79,6 +79,30 @@ def add_columns_to_plates_table():
         if conn:
             cursor.close()
             conn.close()
+def add_columns_to_plates_table():
+    """
+    Add 'sent' and 'valid' columns to the 'plates' table.
+    """
+    try:
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Add 'sent' and 'valid' columns
+        cursor.execute("""
+            ALTER TABLE plates
+            ADD COLUMN IF NOT EXISTS sent BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS valid BOOLEAN DEFAULT FALSE;
+        """)
+        conn.commit()
+        print("Columns 'sent' and 'valid' added successfully to the 'plates' table.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
 def create_plates_table():
     """
     Create the 'plates' table in the newly created database.
@@ -355,7 +379,7 @@ def remove_columns():
 
 # Example usage
 if __name__ == "__main__":
-    droptable()
+    #droptable()
     #create_plates_table()
     #create_mine_info_table()
     #remove_columns()

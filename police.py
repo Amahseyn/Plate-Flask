@@ -5,7 +5,10 @@ from psycopg2.extras import RealDictCursor
 from readsensor import *
 # import socket
 # import json
+from checks import *
 from torchvision import transforms
+import socket
+from datetime import datetime
 
 from psycopg2 import sql, OperationalError, DatabaseError
 # import socket
@@ -31,10 +34,10 @@ from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
 from psycopg2 import sql, OperationalError, DatabaseError
 from flask_socketio import SocketIO, emit
-
+torch.cuda.empty_cache()
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 DB_NAME = "license_plate_db"
@@ -48,8 +51,8 @@ lock = threading.Lock()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
-model_object = YOLO("weights/best.pt").to(device)
-modelCharX = torch.hub.load('yolov5', 'custom', "model/CharsYolo.pt", source='local', force_reload=True).to(device)
+model_object = YOLO("weights/best.pt",verbose = False).to(device)
+modelCharX = torch.hub.load('yolov5', 'custom', "model/CharsYolo.pt", source='local', force_reload=True,verbose = False).to(device)
 
 font_path = "vazir.ttf"
 persian_font = ImageFont.truetype(font_path, 20)
@@ -122,24 +125,49 @@ def process_frame(img, cameraId):
                         englishchardisplay.append(englishchar)
                     current_char_display = ''.join(englishchardisplay)
                     current_time = datetime.now()
+                    englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
+                    conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT date FROM plates 
+                        WHERE predicted_string = %s 
+                        ORDER BY id DESC LIMIT 1
+                    """, (englishoutput,))
+                    last_time = cursor.fetchone()
+                    time_diff = 5
+                    if last_time:
+                        last_time = datetime.strptime(last_time[0], "%Y-%m-%d-%H-%M-%S")
+                        time_diff = (current_time - last_time).total_seconds() / 60
 
+                        cursor.close()
+                        conn.close()
                     # Check if the plate has been detected recently
-                    if current_char_display in last_detection_time:
-                        last_time = last_detection_time[current_char_display]
-                        time_diff = (current_time - last_time).total_seconds() / 60  # Time difference in minutes
-
-                        if time_diff < 5:
+                    if 1<time_diff < 5:
                             persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
                             img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                             draw = ImageDraw.Draw(img_pil)
                             draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
-                            img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                            txtout = f"Detected  {last_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                            cv2.putText(img, txtout, (100,200), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(10, 50, 255), thickness=2, lineType=cv2.LINE_AA)
-                            continue  # Skip writing this plate as it was recently detected
 
+                            
+                            img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                            txtout = f"Detected {int(time_diff)} minute before"
+                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2)
+                            cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(0, 0, 255), thickness=2, lineType=cv2.LINE_AA)
+                            continue  # Skip writing this plate as it was recently detected
+                    if 0<time_diff < 1:
+                        persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
+                        img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                        draw = ImageDraw.Draw(img_pil)
+                        draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(0, 0, 255))
+                        
+                        img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                        cv2.rectangle(img, (x1, y1), (x2, y2), color=(255, 0, 0), thickness=2)
+                        txtout = f"Detected {int(time_diff*60)} second before"
+                        cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255, 0, 0), thickness=2, lineType=cv2.LINE_AA)
+                        continue
                     englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
                     persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
+                    cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)                    
                     img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                     draw = ImageDraw.Draw(img_pil)
                     draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
@@ -158,8 +186,8 @@ def process_frame(img, cameraId):
                     cv2.imwrite(raw_path, img)
                     cv2.imwrite(plate_path, plate_img)
                     # Save to database
-                    raw_url = f"http://localhost:5000/static/images/raw/{raw_filename}"
-                    plate_url = f"http://localhost:5000/static/images/plate/{plate_filename}"
+                    raw_url = f"static/images/raw/{raw_filename}"
+                    plate_url = f"static/images/plate/{plate_filename}"
                     #print(raw_url)
                     conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
                     cursor = conn.cursor()
@@ -180,17 +208,20 @@ def process_frame(img, cameraId):
                     last_detection_time[current_char_display] = current_time
                     
                     try:
-                        evenodd = False
-                        if char_display[6]%2==0:
-                            evenodd = True
+                        evenodd = 0
+                        try :
+                            if int(char_display[-4])%2==0:
+                                evenodd = 1
+                        except: 
+                            evenodd=0
                         data = {
-                            "id": plate_id,  
-                            "date": timestamp,
-                            "raw_image_path": raw_url,
-                            "plate_cropped_image_path": plate_url,
-                            "predicted_string": englishoutput,
-                            "cameraid": cameraId,
-                            "evenodd":evenodd
+                            "id": str(plate_id),  
+                            "date": str(timestamp),
+                            "raw_image_path": str(raw_url),
+                            "plate_cropped_image_path": str(plate_url),
+                            "predicted_string": str(englishoutput),
+                            "cameraid": str(cameraId),
+                            "evenodd":str(evenodd)
                         }
 
                         # Emit the data via SocketIO with the ID from the database
@@ -202,7 +233,12 @@ def process_frame(img, cameraId):
     # Add FPS overlay
     tock = time.time()
     elapsed_time = tock - tick
+    if elapsed_time < 0.0001:
+        elapsed_time = 1
+
     fps_text = f"FPS: {1 / elapsed_time:.2f}"
+
+
     cv2.putText(img, fps_text, (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 50, 255), 2)
     return img
 
@@ -212,41 +248,46 @@ def video_feed(cameraId, mod):
     def generate():
         global frame
         conn = None
+        cap = None
         print(f"State is {mod}, Camera ID is {cameraId}")
-        vis =None
-        try:
-            print(f"State is {mod}, Camera ID is {cameraId}")
-            if mod == 1:
-                vis = True
+        vis = (mod == 1)  # Simplified the visibility check
+        reload_interval = 5 * 60  # 5 minutes in seconds
+        start_time = time.time()
 
+        try:
             conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
             cursor = conn.cursor()
 
-            # Fetch the camera link based on the cameraId
+            # Fetch the camera link from the database
             cursor.execute("SELECT cameralink FROM cameras WHERE id = %s", (cameraId,))
             camera_link = cursor.fetchone()
 
             if camera_link is None:
                 return jsonify({"error": "Camera not found"}), 404
 
-            camera_link = camera_link[0]  # Extract link from tuple
+            # Overriding with the test video file
+            camera_link = "a09.mp4"  
             cap = cv2.VideoCapture(camera_link)
 
             if not cap.isOpened():
                 print(f"Failed to open video stream from {camera_link}")
                 return jsonify({"error": "Failed to open camera stream"}), 500
 
-            while True:
+            while cap.isOpened():
+                # Check if 5 minutes have passed
+                if time.time() - start_time > reload_interval:
+                    print("Reloading video stream...")
+                    cap.release()
+                    cap = cv2.VideoCapture(camera_link)
+                    start_time = time.time()
+
                 ret, img = cap.read()
                 if not ret:
                     print("No frames read. Exiting...")
                     break
 
-                img = cv2.resize(img, (1280, 720))
-                if vis:
-                    processed_frame = process_frame(img, cameraId)
-                else:
-                    processed_frame = img
+                img = cv2.resize(img, (640, 400))
+                processed_frame = process_frame(img, cameraId) if vis else img
 
                 with lock:
                     frame = processed_frame
@@ -259,10 +300,14 @@ def video_feed(cameraId, mod):
         except Exception as e:
             print(f"Error: {str(e)}")
             return jsonify({"error": str(e)}), 500
+
         finally:
+            if cap:
+                cap.release()
             if conn:
                 cursor.close()
                 conn.close()
+            print("Resources released successfully.")
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
@@ -471,7 +516,7 @@ def get_all_plates():
 
         # Build the base query
         base_query = """
-            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path,camera_id
+            SELECT id, date, predicted_string, raw_image_path, plate_cropped_image_path, camera_id
             FROM plates
         """
 
@@ -495,22 +540,40 @@ def get_all_plates():
         else:
             # Fetch records with pagination
             offset = (page - 1) * limit
-            query = base_query + " ORDER BY id LIMIT %s OFFSET %s"
+            query = base_query + " ORDER BY id DESC LIMIT %s OFFSET %s"
             cursor.execute(query, tuple(params) + (limit, offset))
         plates = cursor.fetchall()
 
+        # Function to check if a number is even or odd
+
+
         # Format the results
-        plates_list = [
-            {
+        plates_list = []
+        for row in plates:
+            predicted_string = row[2]
+            evenodd_result = 0
+            try :
+                if int(predicted_string[-4])%2==0:
+                    evenodd_result = 1
+            except: 
+                evenodd_result=0
+
+            # Extract the specific segment for checking
+            # if predicted_string:
+            #     parts = predicted_string.split('-')
+            #     if len(parts) >= 3:  # Ensure there are enough parts
+            #         segment = parts[2]  # Targeting the third part
+            #         evenodd_result = 0  # Check even/odd
+
+            plates_list.append({
                 "id": row[0],
                 "datetime": row[1],
-                "predicted_string": row[2],
+                "predicted_string": predicted_string,
+                "evenodd": evenodd_result,  # Even/odd result for the segment
                 "raw_image_path": row[3],
                 "cropped_plate_path": row[4],
-                "cameraid":row[5]
-            }
-            for row in plates
-        ]
+                "cameraid": row[5]
+            })
 
         # Build the response
         response = {
@@ -532,6 +595,7 @@ def get_all_plates():
         if 'conn' in locals() and conn:
             conn.close()
 
+
 def get_db_connection():
     conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
     return conn
@@ -547,12 +611,18 @@ def get_penalties():
         time2 = request.args.get('time2', default=None)
 
         # Connect to the database
-        conn = get_db_connection()
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
         cursor = conn.cursor()
 
         # Base query
         base_query = """
-        SELECT id, platename, penaltytype, location, datetime, rawimagepath, plateimagepath
+        SELECT id, platename, penaltytype, location, datetime, rawimagepth, plateimagepath,predicted_string
         FROM penalties
         """
         where_clause = []
@@ -588,20 +658,25 @@ def get_penalties():
             cursor.execute(final_query, params + [limit, offset])
             penalties = cursor.fetchall()
 
-        # Fetch predicted_string from plates based on platename
-        plate_query = "SELECT predicted_string FROM plates WHERE id = %s"
+
+        # Function to check if a character is even or odd
+
 
         # Format the result
         penalties_list = []
         for row in penalties:
-            plateid = row[1]
-            cursor.execute(plate_query, (plateid,))
-            plate_result = cursor.fetchone()
-            predicted_string = plate_result[0] if plate_result else None
-            #print(f"predictedstring:{predicted_string}")
+
+            predicted_string = row[7]
+            evenodd_result = 0
+            try :
+                if int(predicted_string[-4])%2==0:
+                    evenodd_result = 1
+            except: 
+                evenodd_result=0
             penalties_list.append({
                 "id": row[0],
-                "platename": predicted_string,  # Replace platename with predicted_string
+                "platename": row[7],  # Replace platename with predicted_string
+                "evenodd":evenodd_result,
                 "penaltytype": row[2],
                 "location": row[3],
                 "datetime": row[4],
@@ -667,6 +742,146 @@ def get_last_raw_image_path(platename):
         conn.close()
 
 # POST: Add a penalty
+
+@app.route('/status', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def get_status():
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Count rows in plates table
+        cur.execute("SELECT COUNT(*) FROM plates")
+        plates_count = cur.fetchone()[0]
+
+        # Count rows in penalties table
+        cur.execute("SELECT COUNT(*) FROM penalties")
+        penalties_count = cur.fetchone()[0]
+
+        # Calculate plates - penalties
+        difference = plates_count - penalties_count
+        cur.execute("SELECT gpsport, api_key FROM configuration LIMIT 1")
+        row = cur.fetchone()
+
+        if row:
+            gpsport, api_key = row
+            print(f"First gpsport: {gpsport}, api_key: {api_key}")
+        else:
+            print("No rows found in the configuration table.")
+        # Check GPS availability (Mocking a check function here)
+        gps_available = check_gps_availability(gpsport)  # Implement this function
+
+        # Check Internet connection (Mocking a check function here)
+        internet_available = check_internet_connection(api_key)  # Implement this function
+
+        cur.close()
+        conn.close()
+
+        # Return the status data
+        return jsonify({
+            'penalties_count': penalties_count,
+            'notpenalty': difference,
+            'gps_available': gps_available,
+            'internet_available': internet_available
+        }), 200
+
+    except Exception as e:
+        if conn:
+            conn.close()
+        return jsonify({'error': str(e)}), 500
+@app.route('/configuration', methods=['GET'])
+def get_configuration():
+    try:
+        # Connect to the database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get gpsport and api_key from the configuration table
+        cursor.execute("SELECT gpsport, api_key FROM configuration LIMIT 1")
+        config_row = cursor.fetchone()
+
+        if config_row:
+            gpsport, api_key = config_row
+        else:
+            gpsport, api_key = None, None
+
+        # Get camera ids and cameralink from the cameras table
+        cursor.execute("SELECT id, cameralink FROM cameras")
+        cameras = cursor.fetchall()
+
+        # Get the server's IP address
+        ip_address = socket.gethostbyname(socket.gethostname())
+
+        return jsonify({
+            'gpsport': gpsport,
+            'api_key': api_key,
+            'ip_address': ip_address,
+            'cameras': [{'id': row[0], 'cameralink': row[1]} for row in cameras]
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+@app.route('/configuration', methods=['PATCH'])
+def update_configuration():
+    try:
+        # Get the data from the request
+        data = request.get_json()
+
+        gpsport = data.get('gpsport')
+        api_key = data.get('api_key')
+        cameras = data.get('cameras', [])
+
+        # Connect to the database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Update gpsport and api_key in the configuration table if provided
+        if gpsport:
+            cursor.execute("UPDATE configuration SET gpsport = %s WHERE id = 1", (gpsport,))
+        if api_key:
+            cursor.execute("UPDATE configuration SET api_key = %s WHERE id = 1", (api_key,))
+
+        # Update cameralink for each camera in the request if provided
+        for camera in cameras:
+            camera_id = camera.get('id')
+            cameralink = camera.get('cameralink')
+            if camera_id and cameralink:
+                cursor.execute("UPDATE cameras SET cameralink = %s WHERE id = %s", (cameralink, camera_id))
+
+        # Commit the changes
+        conn.commit()
+
+        return jsonify({'message': 'Configuration and cameras updated successfully'})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
+@app.route('/location', methods=['GET'])
+@cross_origin(supports_credentials=True)
+def returnlocation():
+        location = read_location_from_com3()
+        locationstatus=None
+        if location==None:
+            conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+            cursor = conn.cursor()
+
+            # Execute the query to fetch the location
+            cursor.execute("SELECT gpsport, location FROM configuration LIMIT 1")
+            row = cursor.fetchone()
+            gpsport , location = row
+            locationstatus= False
+        else:
+            locationstatus = True
+        return jsonify({'location': location,"status":locationstatus}), 200
 @app.route('/penalty', methods=['POST'])
 @cross_origin(supports_credentials=True)
 def add_penalty():
@@ -678,27 +893,42 @@ def add_penalty():
         penaltytype = data['penaltytype']
         location = data['location']
 
-        
-        # Get the last raw image path from the plates table based on platename
-        result = get_last_raw_image_path(platename)
-
-        if not result:
-            return jsonify({'error': f'No image path found for platename {platename}'}), 400
-        
-        # Get the current timestamp
-        current_time = datetime.now()
-        current_time = current_time.strftime("%Y-%m-%d-%H-%M-%S")
-
         # Connect to the database
         conn = get_db_connection()
         cur = conn.cursor()
+        cur.execute("SELECT predicted_string FROM plates WHERE id = %s ORDER BY id DESC LIMIT 1", (platename,))
+        plate = cur.fetchone()
+        # Check the last penalty timestamp for this platename
+        cur.execute("SELECT datetime FROM penalties WHERE predicted_string = %s ORDER BY id DESC LIMIT 1", (plate,))
+        last_penalty = cur.fetchone()
+
+        # Get the current timestamp
+        current_time = datetime.now()
+
+        if last_penalty:
+            # Convert the last penalty time to a datetime object
+            last_penalty_time = datetime.strptime(last_penalty[0], "%Y-%m-%d-%H-%M-%S")
+            time_difference = (current_time - last_penalty_time).total_seconds() / 60
+
+            if time_difference < 15:
+                remaining_time = 15 - time_difference
+                return jsonify({'error': f'Penalty already added recently. Please wait {remaining_time:.2f} minutes.'}), 400
+
+        # Continue with the penalty addition if the time check passes
+        result = get_last_raw_image_path(platename)
+
+        if not result:
+            return jsonify({'error': f'No image path found for platename {plate}'}), 400
+
+        # Format the current timestamp
+        current_time_str = current_time.strftime("%Y-%m-%d-%H-%M-%S")
 
         # Insert data into the 'penalties' table
         query = """
-        INSERT INTO penalties (platename, penaltytype, location, datetime, rawimagepath, plateimagepath)
-        VALUES (%s, %s, %s, %s, %s, %s);
+        INSERT INTO penalties (platename, penaltytype, location, datetime, rawimagepth, plateimagepath,predicted_string)
+        VALUES (%s, %s, %s, %s, %s, %s,%s);
         """
-        cur.execute(query, (platename, penaltytype, location, current_time, result[0], result[1]))  # Using result[1] for plateimagepath
+        cur.execute(query, (platename, penaltytype, location, current_time_str, result[0], result[1],plate))
 
         # Commit the transaction
         conn.commit()
@@ -711,13 +941,9 @@ def add_penalty():
         return jsonify({'message': 'Penalty added successfully'}), 201
 
     except Exception as e:
+        if conn:
+            conn.close()
         return jsonify({'error': str(e)}), 400
-
-@app.route('/location', methods=['GET'])
-@cross_origin(supports_credentials=True)
-def returnlocation():
-        location = read_location_from_com3()
-        return jsonify({'location': location}), 200
 @app.route('/penalty/<int:id>', methods=['PUT'])
 @cross_origin(supports_credentials=True)
 def update_penalty(id):
@@ -742,7 +968,7 @@ def update_penalty(id):
         print("Executing Update...")
         query = """
         UPDATE penalties
-        SET platename = %s, penaltytype = %s, location = %s, datetime = %s
+        SET predicted_string = %s, penaltytype = %s, location = %s, datetime = %s
         WHERE id = %s;
         """
         cur.execute(query, (platename, penaltytype, location, datetime_value, id))
@@ -780,7 +1006,7 @@ def get_penalty_by_id(penalty_id):
         # Query the database for the specific penalty by ID
         cursor.execute(
             """
-            SELECT id, platename, penaltytype, location, datetime, rawimagepath
+            SELECT id, platename, penaltytype, location, datetime, rawimagepth,predicted_string,plateimagepath
             FROM penalties
             WHERE id = %s
             """,
@@ -795,11 +1021,13 @@ def get_penalty_by_id(penalty_id):
         # Format the result
         penalty_data = {
             "id": penalty[0],
-            "platename": penalty[1],
+            "platename": penalty[6],
             "penaltytype": penalty[2],
             "location": penalty[3],
             "datetime": penalty[4],
             "raw_image_path": penalty[5],
+            "cropped_plate":penalty[7]
+
         }
 
         return jsonify(penalty_data), 200
@@ -815,7 +1043,6 @@ def get_penalty_by_id(penalty_id):
             cursor.close()
         if 'conn' in locals() and conn:
             conn.close()
-
 
 # DELETE: Delete a penalty record
 @app.route('/penalty/<int:id>', methods=['DELETE'])
@@ -871,7 +1098,7 @@ def patch_penalty(id):
         update_values = []
 
         if platename:
-            update_fields.append("platename = %s")
+            update_fields.append("predicted_string = %s")
             update_values.append(platename)
         if penaltytype:
             update_fields.append("penaltytype = %s")
@@ -922,11 +1149,11 @@ def patch_penalty(id):
 
 
 
-@app.route('/images/<path:filename>')
+@app.route('/static/images/<path:filename>')
 @cross_origin(supports_credentials=True)
 def serve_image(filename):
     print(f"filename:{filename}")
-    return send_from_directory('static', filename)
+    return send_from_directory('static/images', filename)
 
 @app.before_request
 def basic_authentication():
@@ -934,4 +1161,4 @@ def basic_authentication():
         return Response()
     
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0',debug=True, port=5000)
+    socketio.run(app, host='0.0.0.0', debug= True,port=5000)

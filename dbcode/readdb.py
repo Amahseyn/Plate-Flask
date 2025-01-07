@@ -15,12 +15,12 @@ def fetch_plate_data():
     
     cursor.execute(
         """
-        SELECT * FROM vehicle_info
+        SELECT * FROM penalties
 
         """
     )
 
-    rows = cursor.fetchall()
+    rows = cursor.fetchone()
 
     # Fetch all the rows from the query result
 
