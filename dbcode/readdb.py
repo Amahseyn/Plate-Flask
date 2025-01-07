@@ -3,7 +3,7 @@ import psycopg2
 import datetime
 
 
-DB_NAME = "license_plate_db"
+DB_NAME = "client"
 DB_USER = "postgres"
 DB_PASSWORD = "m102030m"
 DB_HOST = "localhost"
@@ -15,7 +15,7 @@ def fetch_plate_data():
     
     cursor.execute(
         """
-        SELECT * FROM penalties
+        SELECT * FROM plates
 
         """
     )

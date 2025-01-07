@@ -86,9 +86,11 @@ def detectPlateChars(croppedPlate):
     state= False
     if len(chars)==8:
         if 10<=clses[2]<=42:
+            state = True
             for i in [0,1,3,4,5,6,7]:
-                if clses[i]<10:
-                    state = True
+                if clses[i] >= 10:  # If any condition fails, break and set state to False
+                    state = False
+                    break
 
 
     # If conditions are not met, maintain the same return structure
