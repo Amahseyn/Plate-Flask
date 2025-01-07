@@ -3,7 +3,7 @@ import psycopg2
 import datetime
 
 
-DB_NAME = "client"
+DB_NAME = "license_plate_db"
 DB_USER = "postgres"
 DB_PASSWORD = "m102030m"
 DB_HOST = "localhost"
@@ -20,7 +20,7 @@ def fetch_plate_data():
         """
     )
 
-    rows = cursor.fetchone()
+    rows = cursor.fetchall()
 
     # Fetch all the rows from the query result
 
