@@ -432,7 +432,7 @@ def update_camera(id):
 
 @app.route('/camera/<int:cameraId>', methods=['PUT'])
 @cross_origin(supports_credentials=True)
-def update_camera(cameraId):
+def patch_camera(cameraId):
     from flask import request
     conn = None
     try:
