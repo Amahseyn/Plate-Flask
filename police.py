@@ -4,6 +4,8 @@ from flask import Flask, Response, send_file, jsonify,send_from_directory
 from psycopg2.extras import RealDictCursor
 from readsensor import *
 # import socket
+from bidi.algorithm import get_display
+import arabic_reshaper
 # import json
 from checks import *
 from torchvision import transforms
@@ -373,6 +375,51 @@ def add_camera():
         conn.commit()
 
         return jsonify({"message": "Camera added successfully"}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+@app.route('/camera/<int:id>', methods=['PATCH'])
+@cross_origin(supports_credentials=True)
+def update_camera(id):
+    conn = None
+    try:
+        # Extract data from the incoming request
+        data = request.get_json()
+        
+        # Fields to update - only update the fields that are provided
+        cameraname = data.get('cameraname', None)
+        cameralocation = data.get('cameralocation', None)
+        cameralink = data.get('cameralink', None)
+
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+
+        cursor = conn.cursor()
+
+        # Check if the camera exists
+        cursor.execute("SELECT * FROM cameras WHERE id = %s", (id,))
+        camera = cursor.fetchone()
+
+        if not camera:
+            return jsonify({"error": "Camera not found"}), 404
+
+        # Update only the fields that were provided
+        if cameraname:
+            cursor.execute("UPDATE cameras SET cameraname = %s WHERE id = %s", (cameraname, id))
+        if cameralocation:
+            cursor.execute("UPDATE cameras SET cameralocation = %s WHERE id = %s", (cameralocation, id))
+        if cameralink:
+            cursor.execute("UPDATE cameras SET cameralink = %s WHERE id = %s", (cameralink, id))
+
+        # Commit the changes
+        conn.commit()
+
+        return jsonify({"message": "Camera updated successfully"}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -913,16 +960,15 @@ def add_penalty():
 
         # Get the current timestamp
         current_time = datetime.now()
-
         if last_penalty:
             # Convert the last penalty time to a datetime object
             last_penalty_time = datetime.strptime(last_penalty[0], "%Y-%m-%d-%H-%M-%S")
             time_difference = (current_time - last_penalty_time).total_seconds() / 60
-
+            message = f"{last_penalty_time.hour}:{last_penalty_time.minute}"
             if time_difference < 15:
-                remaining_time = 15 - time_difference
-                return jsonify({'error': f'Penalty already added recently. Please wait {remaining_time:.2f} minutes.'}), 400
 
+                return jsonify({'Time':message}), 400
+ 
         # Continue with the penalty addition if the time check passes
         result = get_last_raw_image_path(platename)
 
