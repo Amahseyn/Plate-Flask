@@ -4,8 +4,7 @@ from flask import Flask, Response, send_file, jsonify,send_from_directory
 from psycopg2.extras import RealDictCursor
 from readsensor import *
 # import socket
-from bidi.algorithm import get_display
-import arabic_reshaper
+
 # import json
 from checks import *
 from torchvision import transforms
@@ -265,12 +264,14 @@ def video_feed(cameraId, mod):
             # Fetch the camera link from the database
             cursor.execute("SELECT cameralink FROM cameras WHERE id = %s", (cameraId,))
             camera_link = cursor.fetchone()
-
+            print(camera_link)
             if camera_link is None:
+            
                 return jsonify({"error": "Camera not found"}), 404
-
+            if camera_link:
+                camera_link=camera_link[0]
             # Overriding with the test video file
-            camera_link = "a09.mp4"  
+            #camera_link = "a09.mp4"  
             cap = cv2.VideoCapture(camera_link)
 
             if not cap.isOpened():
@@ -383,56 +384,11 @@ def add_camera():
         if conn:
             cursor.close()
             conn.close()
-@app.route('/camera/<int:id>', methods=['PATCH'])
-@cross_origin(supports_credentials=True)
-def update_camera(id):
-    conn = None
-    try:
-        # Extract data from the incoming request
-        data = request.get_json()
-        
-        # Fields to update - only update the fields that are provided
-        cameraname = data.get('cameraname', None)
-        cameralocation = data.get('cameralocation', None)
-        cameralink = data.get('cameralink', None)
-
-        # Connect to the database
-        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-
-        cursor = conn.cursor()
-
-        # Check if the camera exists
-        cursor.execute("SELECT * FROM cameras WHERE id = %s", (id,))
-        camera = cursor.fetchone()
-
-        if not camera:
-            return jsonify({"error": "Camera not found"}), 404
-
-        # Update only the fields that were provided
-        if cameraname:
-            cursor.execute("UPDATE cameras SET cameraname = %s WHERE id = %s", (cameraname, id))
-        if cameralocation:
-            cursor.execute("UPDATE cameras SET cameralocation = %s WHERE id = %s", (cameralocation, id))
-        if cameralink:
-            cursor.execute("UPDATE cameras SET cameralink = %s WHERE id = %s", (cameralink, id))
-
-        # Commit the changes
-        conn.commit()
-
-        return jsonify({"message": "Camera updated successfully"}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    finally:
-        if conn:
-            cursor.close()
-            conn.close()
 
 
 @app.route('/camera/<int:cameraId>', methods=['PUT'])
 @cross_origin(supports_credentials=True)
-def patch_camera(cameraId):
+def update_camera(cameraId):
     from flask import request
     conn = None
     try:
@@ -483,6 +439,51 @@ def delete_camera(cameraId):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+@app.route('/camera/<int:id>', methods=['PATCH'])
+@cross_origin(supports_credentials=True)
+def patch_camera(id):
+    conn = None
+    try:
+        # Extract data from the incoming request
+        data = request.get_json()
+        
+        # Fields to update - only update the fields that are provided
+        cameraname = data.get('cameraname', None)
+        cameralocation = data.get('cameralocation', None)
+        cameralink = data.get('cameralink', None)
+
+        # Connect to the database
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+
+        cursor = conn.cursor()
+
+        # Check if the camera exists
+        cursor.execute("SELECT * FROM cameras WHERE id = %s", (id,))
+        camera = cursor.fetchone()
+
+        if not camera:
+            return jsonify({"error": "Camera not found"}), 404
+
+        # Update only the fields that were provided
+        if cameraname:
+            cursor.execute("UPDATE cameras SET cameraname = %s WHERE id = %s", (cameraname, id))
+        if cameralocation:
+            cursor.execute("UPDATE cameras SET cameralocation = %s WHERE id = %s", (cameralocation, id))
+        if cameralink:
+            cursor.execute("UPDATE cameras SET cameralink = %s WHERE id = %s", (cameralink, id))
+
+        # Commit the changes
+        conn.commit()
+
+        return jsonify({"message": "Camera updated successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
     finally:
         if conn:
             cursor.close()
@@ -840,6 +841,7 @@ def get_status():
             conn.close()
         return jsonify({'error': str(e)}), 500
 @app.route('/configuration', methods=['GET'])
+@cross_origin(supports_credentials=True)
 def get_configuration():
     try:
         # Connect to the database
@@ -860,7 +862,7 @@ def get_configuration():
         cameras = cursor.fetchall()
 
         # Get the server's IP address
-        ip_address = socket.gethostbyname(socket.gethostname())
+        ip_address ="192.168.1.20"
 
         return jsonify({
             'gpsport': gpsport,
@@ -875,7 +877,10 @@ def get_configuration():
         if conn:
             cursor.close()
             conn.close()
+
 @app.route('/configuration', methods=['PATCH'])
+@cross_origin(supports_credentials=True)
+
 def update_configuration():
     try:
         # Get the data from the request

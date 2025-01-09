@@ -33,7 +33,7 @@ def check_gps_availability(gpsport):
             print(f"Connected to {ser.port} at {ser.baudrate} baudrate.")
 
         # Read and parse serial data
-
+        if 1:
             data = ser.readline()
             if data:
                 return True

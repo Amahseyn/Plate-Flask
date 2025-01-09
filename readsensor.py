@@ -7,7 +7,7 @@ import psycopg2
 def reverse_geocode(lat, lon,apikey):
     BASE_URL = 'https://map.ir/reverse/'
     headers = {
-        'x-api-key': API_KEY,
+        'x-api-key': apikey,
         'content-type': 'application/json'
     }
     params = {
@@ -52,7 +52,7 @@ def read_location_from_com3():
         print(row)
         # Configure serial connection
         ser = serial.Serial(
-            port=gpsport,
+            port="COM5",
             baudrate=115200,
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
@@ -63,7 +63,7 @@ def read_location_from_com3():
             print(f"Connected to {ser.port} at {ser.baudrate} baudrate.")
 
         # Read and parse serial data
-        if True:
+        for i in range(1):
             data = ser.readline()
             if data:
                 # Decode the received data
@@ -89,6 +89,7 @@ def read_location_from_com3():
                     WHERE id = (SELECT id FROM configuration LIMIT 1);
                 """, (location_name,))
                 return location_name
+            
 
     except:
         
