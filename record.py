@@ -246,8 +246,10 @@ def process_frame(img, cameraId,conn,cursor):
 def video_feed(cameraId, mod):
     def generate():
         global frame
+        
         conn = None
         cap = None
+        out = None
         print(f"State is {mod}, Camera ID is {cameraId}")
         vis = (mod == 1)  # Simplified the visibility check
         reload_interval = 5 * 60  # 5 minutes in seconds
@@ -278,7 +280,9 @@ def video_feed(cameraId, mod):
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             output_filename = f'recorded_video_camera_{cameraId}_{timestamp}.mp4'
 
-
+            # Set up video writer for raw recording with a unique filename for each camera
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_filename, fourcc, 20.0, (1080, 720))
 
             while cap.isOpened():
                 if time.time() - start_time > reload_interval:
@@ -298,6 +302,9 @@ def video_feed(cameraId, mod):
                 with lock:
                     frame = processed_frame
 
+                # Write the raw frame to the video file
+                out.write(frame)
+
                 _, buffer = cv2.imencode('.jpg', frame)
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
@@ -312,7 +319,8 @@ def video_feed(cameraId, mod):
         finally:
             if cap:
                 cap.release()
-
+            if out:
+                out.release()
             if conn:
                 cursor.close()
                 conn.close()
