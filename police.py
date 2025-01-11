@@ -304,8 +304,8 @@ def video_feed(cameraId, mod):
                 time.sleep(0.01)
 
         except Exception as e:
-            if out:
-                out.release()
+
+
             print(f"Error: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
