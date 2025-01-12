@@ -161,7 +161,7 @@ def process_frame(img, cameraId,conn,cursor,frame):
                             draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
                             img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
                             timestamp = current_time.strftime("%Y-%m-%d-%H-%M-%S")
-                            random_number = random.randint(1, 1000)
+                            random_number = random.randint(1000, 9999)
                             raw_filename = f"raw_{timestamp}_{random_number}.jpg"
                             plate_filename = f"plt_{timestamp}-{random_number}.jpg"
                             
@@ -250,7 +250,7 @@ def video_feed(cameraId, mod):
             else:
                 camera_link = camera_link[0]
 
-            cap = cv2.VideoCapture("out.mp4")
+            cap = cv2.VideoCapture("a09.mp4")
 
             if not cap.isOpened():
                 print(f"Failed to open video stream from {camera_link}")
