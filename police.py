@@ -3,16 +3,10 @@ eventlet.monkey_patch()
 from flask import Flask, Response, send_file, jsonify,send_from_directory
 from psycopg2.extras import RealDictCursor
 from readsensor import *
-# import socket
-
-# import json
 from checks import *
 from torchvision import transforms
-import socket
 from datetime import datetime
-
 from psycopg2 import sql, OperationalError, DatabaseError
-# import socket
 from flask import request, jsonify, send_file
 import psycopg2
 import cv2
@@ -27,13 +21,10 @@ from configParams import Parameters
 import datetime
 import psycopg2
 import warnings
-import requests
 warnings.filterwarnings("ignore", category=FutureWarning)
-
 params = Parameters()
 from flask_cors import CORS, cross_origin
 from datetime import datetime, timedelta
-from psycopg2 import sql, OperationalError, DatabaseError
 from flask_socketio import SocketIO, emit
 torch.cuda.empty_cache()
 
@@ -66,16 +57,16 @@ def detectPlateChars(croppedPlate):
     chars, englishchars, confidences = [], [], []
     results = modelCharX(croppedPlate)
     detections = results.pred[0]
-    detections = sorted(detections, key=lambda x: x[0])  # Sort by x coordinate
+    detections = sorted(detections, key=lambda x: x[0])
     clses = []
     for det in detections:
         conf = det[4]
         
         if conf > 0.5:
-            cls = int(det[5].item())  # Ensure cls is an integer
+            cls = int(det[5].item())
             clses.append(int(cls))
-            char = params.char_id_dict.get(str(int(cls)), '')  # Get character or empty string
-            englishchar = params.char_id_dict1.get(str(int(cls)), '')  # Get English character or empty string
+            char = params.char_id_dict.get(str(int(cls)), '')
+            englishchar = params.char_id_dict1.get(str(int(cls)), '')  
             chars.append(char)
             englishchars.append(englishchar)
             confidences.append(conf.item())
@@ -84,25 +75,20 @@ def detectPlateChars(croppedPlate):
         if 10<=clses[2]<=42:
             state = True
             for i in [0,1,3,4,5,6,7]:
-                if clses[i] >= 10:  # If any condition fails, break and set state to False
+                if clses[i] >= 10: 
                     state = False
                     break
-
-
-    # If conditions are not met, maintain the same return structure
     return state, chars, englishchars, confidences
 
 
 
 
 last_detection_time = {}
-# Global dictionary to track last detection times
+last_plate = None
 def process_frame(img, cameraId,conn,cursor):
-    global last_char_display, last_detection_time
+    global last_char_display, last_detection_time,last_plate
     tick = time.time()
-
     results = model_object(img, conf=0.7, stream=True)
-
     for detection in results:
         bbox = detection.boxes
         for box in bbox:
@@ -124,114 +110,104 @@ def process_frame(img, cameraId,conn,cursor):
                     current_char_display = ''.join(englishchardisplay)
                     current_time = datetime.now()
                     englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
-
-                    cursor.execute("""
-                        SELECT date 
-                        FROM (
-                            SELECT id, date, predicted_string 
-                            FROM plates 
+                    if last_plate == englishoutput:
+                        cursor.execute("""
+                            SELECT date 
+                            FROM (
+                                SELECT id, date, predicted_string 
+                                FROM plates 
+                                ORDER BY id DESC 
+                                LIMIT 100
+                            ) AS last_100_rows
+                            WHERE predicted_string = %s 
                             ORDER BY id DESC 
-                            LIMIT 100
-                        ) AS last_100_rows
-                        WHERE predicted_string = %s 
-                        ORDER BY id DESC 
-                        LIMIT 1
-                    """, (englishoutput,))
-                    last_time = cursor.fetchone()
-                    time_diff = 5
-                    if last_time:
-                        last_time = datetime.strptime(last_time[0], "%Y-%m-%d-%H-%M-%S")
-                        time_diff = (current_time - last_time).total_seconds() / 60
+                            LIMIT 1
+                        """, (englishoutput,))
+                        last_time = cursor.fetchone()
+                        time_diff = 5
+                        if last_time:
+                            last_time = datetime.strptime(last_time[0], "%Y-%m-%d-%H-%M-%S")
+                            time_diff = (current_time - last_time).total_seconds() / 60
+                        if 1<time_diff < 5:
+                                persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
+                                img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                                draw = ImageDraw.Draw(img_pil)
+                                draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
 
-
-                    # Check if the plate has been detected recently
-                    if 1<time_diff < 5:
+                                
+                                img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                                txtout = f"Detected {int(time_diff)} minute before"
+                                cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2)
+                                cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(0, 0, 255), thickness=2, lineType=cv2.LINE_AA)
+                                continue  # Skip writing this plate as it was recently detected
+                        if 0<time_diff < 1:
                             persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
                             img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                             draw = ImageDraw.Draw(img_pil)
-                            draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
-
+                            draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(0, 0, 255))
                             
                             img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                            txtout = f"Detected {int(time_diff)} minute before"
-                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2)
-                            cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(0, 0, 255), thickness=2, lineType=cv2.LINE_AA)
-                            continue  # Skip writing this plate as it was recently detected
-                    if 0<time_diff < 1:
+                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(255, 0, 0), thickness=2)
+                            txtout = f"Detected {int(time_diff*60)} second before"
+                            cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255, 0, 0), thickness=2, lineType=cv2.LINE_AA)
+                            continue
+                        englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
                         persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
+                        cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)                    
                         img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                         draw = ImageDraw.Draw(img_pil)
-                        draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(0, 0, 255))
-                        
+                        draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
                         img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                        cv2.rectangle(img, (x1, y1), (x2, y2), color=(255, 0, 0), thickness=2)
-                        txtout = f"Detected {int(time_diff*60)} second before"
-                        cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255, 0, 0), thickness=2, lineType=cv2.LINE_AA)
-                        continue
-                    englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
-                    persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
-                    cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)                    
-                    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                    draw = ImageDraw.Draw(img_pil)
-                    draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
-                    img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                    # Save images to disk
-                    timestamp = current_time.strftime("%Y-%m-%d-%H-%M-%S")
-                    raw_filename = f"raw_{timestamp}.jpg"
-                    plate_filename = f"plt_{timestamp}.jpg"
-                    
-                    raw_path = os.path.join('static/images/raw', raw_filename)
-                    plate_path = os.path.join('static/images/plate', plate_filename)
-                    
-                    os.makedirs(os.path.dirname(raw_path), exist_ok=True)
-                    os.makedirs(os.path.dirname(plate_path), exist_ok=True)
+                        timestamp = current_time.strftime("%Y-%m-%d-%H-%M-%S")
+                        raw_filename = f"raw_{timestamp}.jpg"
+                        plate_filename = f"plt_{timestamp}.jpg"
+                        
+                        raw_path = os.path.join('static/images/raw', raw_filename)
+                        plate_path = os.path.join('static/images/plate', plate_filename)
+                        
+                        os.makedirs(os.path.dirname(raw_path), exist_ok=True)
+                        os.makedirs(os.path.dirname(plate_path), exist_ok=True)
+                        cv2.imwrite(raw_path, img)
+                        cv2.imwrite(plate_path, plate_img)
 
-                    cv2.imwrite(raw_path, img)
-                    cv2.imwrite(plate_path, plate_img)
-                    # Save to database
-                    raw_url = f"static/images/raw/{raw_filename}"
-                    plate_url = f"static/images/plate/{plate_filename}"
+                        raw_url = f"static/images/raw/{raw_filename}"
+                        plate_url = f"static/images/plate/{plate_filename}"
 
-                    cursor.execute(
-                        """
-                        INSERT INTO plates (date, raw_image_path, plate_cropped_image_path, predicted_string, camera_id)
-                        VALUES (%s, %s, %s, %s, %s)
-                        RETURNING id
-                        """,
-                        (timestamp, raw_url, plate_url, englishoutput, cameraId)
-                    )
-                    plate_id = cursor.fetchone()[0]
-                    conn.commit()
+                        cursor.execute(
+                            """
+                            INSERT INTO plates (date, raw_image_path, plate_cropped_image_path, predicted_string, camera_id)
+                            VALUES (%s, %s, %s, %s, %s)
+                            RETURNING id
+                            """,
+                            (timestamp, raw_url, plate_url, englishoutput, cameraId)
+                        )
+                        plate_id = cursor.fetchone()[0]
+                        conn.commit()
+                        try:
+                            evenodd = 0
+                            try :
+                                if int(char_display[-4])%2==0:
+                                    evenodd = 1
+                            except: 
+                                evenodd=0
+                            data = {
+                                "id": str(plate_id),  
+                                "date": str(timestamp),
+                                "raw_image_path": str(raw_url),
+                                "plate_cropped_image_path": str(plate_url),
+                                "predicted_string": str(englishoutput),
+                                "cameraid": str(cameraId),
+                                "evenodd":str(evenodd)
+                            }
+                            socketio.emit('plate_detected', data)
+                            print(f"Data emitted via SocketIO with ID: {plate_id}")
+                        except Exception as e:
+                            print(f"Error emitting data: {e}")
+                    else:
+                        last_plate = englishoutput
 
-
-
-                    last_detection_time[current_char_display] = current_time
-                    
-                    try:
-                        evenodd = 0
-                        try :
-                            if int(char_display[-4])%2==0:
-                                evenodd = 1
-                        except: 
-                            evenodd=0
-                        data = {
-                            "id": str(plate_id),  
-                            "date": str(timestamp),
-                            "raw_image_path": str(raw_url),
-                            "plate_cropped_image_path": str(plate_url),
-                            "predicted_string": str(englishoutput),
-                            "cameraid": str(cameraId),
-                            "evenodd":str(evenodd)
-                        }
-
-                        # Emit the data via SocketIO with the ID from the database
-                        socketio.emit('plate_detected', data)
-                        print(f"Data emitted via SocketIO with ID: {plate_id}")
-                    except Exception as e:
-                        print(f"Error emitting data: {e}")
-
-    # Add FPS overlay
     tock = time.time()
+
     elapsed_time = tock - tick
     if elapsed_time < 0.0001:
         elapsed_time = 1
@@ -249,13 +225,12 @@ def video_feed(cameraId, mod):
         conn = None
         cap = None
         print(f"State is {mod}, Camera ID is {cameraId}")
-        vis = (mod == 1)  # Simplified the visibility check
-        reload_interval = 5 * 60  # 5 minutes in seconds
+        vis = (mod == 1)  
+        reload_interval = 5 * 60  
         start_time = time.time()
 
         try:
             if conn==False or conn==None:
-
                 conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
                 cursor = conn.cursor()
 
@@ -268,17 +243,13 @@ def video_feed(cameraId, mod):
             else:
                 camera_link = camera_link[0]
 
-            cap = cv2.VideoCapture(camera_link)
+            cap = cv2.VideoCapture("a09.mp4")
 
             if not cap.isOpened():
                 print(f"Failed to open video stream from {camera_link}")
                 return jsonify({"error": "Failed to open camera stream"}), 500
 
-            # Generate timestamp for unique video filename
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_filename = f'recorded_video_camera_{cameraId}_{timestamp}.mp4'
-
-
 
             while cap.isOpened():
                 if time.time() - start_time > reload_interval:
@@ -302,10 +273,7 @@ def video_feed(cameraId, mod):
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
                 time.sleep(0.01)
-
         except Exception as e:
-
-
             print(f"Error: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
@@ -328,6 +296,63 @@ def handle_message(data):
     print(f"Message received: {data}")
     # Optionally, you can emit a response back
     emit('response', {'status': 'Message received'})
+@app.route('/camera_sort', methods=['POST'])
+@cross_origin(supports_credentials=True)
+def update_camera_ids():
+    from flask import request, jsonify
+    conn = None
+    try:
+        data = request.get_json()
+
+        # Ensure the 'camera_ids' field is present in the request
+        if 'camera_ids' not in data:
+            return jsonify({"error": "Missing required field: camera_ids"}), 400
+
+        camera_ids = list(map(int, data['camera_ids'].split(';')))
+
+        # Ensure IDs are unique and within range
+        if len(set(camera_ids)) != len(camera_ids) or len(set(camera_ids)) > 4:
+            return jsonify({"error": "Camera IDs must be unique and no more than 4"}), 400
+
+        conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
+        cursor = conn.cursor()
+
+        # Fetch all existing camera IDs
+        cursor.execute("SELECT id FROM cameras ORDER BY id")
+        existing_ids = [row[0] for row in cursor.fetchall()]
+
+        # Ensure the number of provided IDs matches the number of records
+        if len(existing_ids) != len(camera_ids):
+            return jsonify({"error": "Mismatch between the number of cameras and provided IDs"}), 400
+
+        # Step 1: Assign temporary IDs to avoid conflict
+        temp_ids = [id + 100 for id in existing_ids]
+        for old_id, temp_id in zip(existing_ids, temp_ids):
+            cursor.execute("UPDATE cameras SET id = %s WHERE id = %s", (temp_id, old_id))
+
+        # Step 2: Assign the final desired IDs
+        for temp_id, new_id in zip(temp_ids, camera_ids):
+            cursor.execute("UPDATE cameras SET id = %s WHERE id = %s", (new_id, temp_id))
+
+        # Commit the transaction
+        conn.commit()
+
+        # Fetch all updated data to return as a list of dictionaries
+        cursor.execute("SELECT id, cameraname, cameralocation, cameralink FROM cameras ORDER BY id")
+        columns = [desc[0] for desc in cursor.description]
+        updated_cameras = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        return jsonify({"message": "Camera IDs updated successfully", "cameras": updated_cameras}), 200
+
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
+
 @app.route('/cameras', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def get_cameras():
@@ -350,8 +375,6 @@ def get_cameras():
         if conn:
             cursor.close()
             conn.close()
-
-
 @app.route('/camera', methods=['POST'])
 @cross_origin(supports_credentials=True)
 def add_camera():

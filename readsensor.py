@@ -52,7 +52,7 @@ def read_location_from_com3():
         print(row)
         # Configure serial connection
         ser = serial.Serial(
-            port="COM5",
+            port=gpsport,
             baudrate=115200,
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
@@ -98,8 +98,42 @@ def read_location_from_com3():
         if 'ser' in locals() and ser.is_open:
             ser.close()
             print("Serial port closed.")
+def check_gps_port():
+    try:
+        conn = psycopg2.connect(dbname="license_plate_db", user="postgres", password="m102030m", host="localhost", port="5432")
+        cursor = conn.cursor()
+        cursor.execute("SELECT gpsport, location, api_key FROM configuration LIMIT 1")
+        row = cursor.fetchone()
+        print(f"Database Config: {row}")
+
+        for port_number in range(1, 9):
+            gpsport = f"COM{port_number}"
+            try:
+                ser = serial.Serial(
+                    port=gpsport,
+                    baudrate=115200,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=1
+                )
+                if ser.is_open:
+                    print(f"GPS device detected on {gpsport}")
+                    cursor.execute("UPDATE configuration SET gpsport = %s WHERE id = (SELECT id FROM configuration LIMIT 1)", (gpsport,))
+                    conn.commit()
+                    ser.close()
+                    print(f"Database updated with GPS port: {gpsport}")
+                    return gpsport
+            except (serial.SerialException, serial.SerialTimeoutException):
+                continue
+
+        print("No GPS device found.")
+        conn.close()
+    except psycopg2.Error as e:
+        print(f"Database error: {e}")
 
 if __name__ == "__main__":
+    check_gps_port()
     # Fetch location name
     location = read_location_from_com3()
     print(f"Location fetched: {location}")
