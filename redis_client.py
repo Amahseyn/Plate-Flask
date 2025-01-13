@@ -5,7 +5,6 @@ from psycopg2.extras import RealDictCursor
 from readsensor import *
 from checks import *
 from torchvision import transforms
-from datetime import datetime
 from psycopg2 import sql, OperationalError, DatabaseError
 from flask import request, jsonify, send_file
 import psycopg2
@@ -18,10 +17,11 @@ import time
 import os
 import torch
 from configParams import Parameters
+from datetime import datetime, timedelta
 import datetime
 import psycopg2
 import random
-
+import redis
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 params = Parameters()
@@ -54,6 +54,9 @@ dirpath = os.getcwd()
 images_dir = 'images'
 raw_images_dir = os.path.join(images_dir, 'raw')
 plate_images_dir = os.path.join(images_dir, 'plate')
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
+redis_client = redis.StrictRedis(host='localhost', port=6379, db=0)
+
 def detectPlateChars(croppedPlate):
     """Detect characters on a cropped plate."""
     chars, englishchars, confidences = [], [], []
@@ -87,143 +90,135 @@ def detectPlateChars(croppedPlate):
 
 last_detection_time = {}
 last_plate = None
-def process_frame(img, cameraId,conn,cursor,frame):
-    global last_char_display, last_detection_time,last_plate
-    tick = time.time()
-    results = model_object(img, conf=0.7, stream=True)
-    for detection in results:
-        bbox = detection.boxes
-        for box in bbox:
-            x1, y1, x2, y2 = box.xyxy[0]
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            plate_img = img[y1:y2, x1:x2]
+repeat_threshold = 3  # Number of times a plate must be detected before adding to the database
 
-            cls_names = int(box.cls[0])
-            if cls_names == 1:
-                state,chars,englishchars, charConfAvg = detectPlateChars(plate_img)
-                char_display = []
-                englishchardisplay=[]
-                
-                if state==True:
-                    for persianchar in chars:
-                        char_display.append(persianchar)
-                    for englishchar in englishchars:
-                        englishchardisplay.append(englishchar)
-                    current_char_display = ''.join(englishchardisplay)
-                    current_time = datetime.now()
-                    englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
-                    
-                    cursor.execute("""
-                        SELECT date 
-                        FROM (
-                            SELECT id, date, predicted_string 
-                            FROM plates 
-                            ORDER BY id DESC 
-                            LIMIT 100
-                        ) AS last_100_rows
-                        WHERE predicted_string = %s 
-                        ORDER BY id DESC 
-                        LIMIT 1
-                    """, (englishoutput,))
-                    last_time = cursor.fetchone()
-                    time_diff = 5
-                    if last_time:
-                        last_time = datetime.strptime(last_time[0], "%Y-%m-%d-%H-%M-%S")
-                        time_diff = (current_time - last_time).total_seconds() / 60
-                        if 1<time_diff < 5:
-                            persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
-                            img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                            draw = ImageDraw.Draw(img_pil)
-                            draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
 
-                            
-                            img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                            txtout = f"Detected {int(time_diff)} minute before"
-                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2)
-                            cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(0, 0, 255), thickness=2, lineType=cv2.LINE_AA)
-                            continue  # Skip writing this plate as it was recently detected
-                        if 0<time_diff < 1:
-                            persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
-                            img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                            draw = ImageDraw.Draw(img_pil)
-                            draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(0, 0, 255))
-                            
-                            img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(255, 0, 0), thickness=2)
-                            txtout = f"Detected {int(time_diff*60)} second before"
-                            cv2.putText(img, txtout, (0,100), fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255, 0, 0), thickness=2, lineType=cv2.LINE_AA)
-                            continue
-                        if last_plate == englishoutput:
-                            persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
-                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)                    
+# Initialize Redis connection
+k = None
+checktimedup = 5
+repeateplate = 2
+repeateplate -=1 
+def process_frame(img, cameraId, conn, cursor, frame):
+    with app.app_context():
+        insertion=None
+        global last_plate, plate_counter,k
+        tick = time.time()
+        results = model_object(img, conf=0.7, stream=True)
+
+        for detection in results:
+            bbox = detection.boxes
+            for box in bbox:
+                x1, y1, x2, y2 = box.xyxy[0]
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                plate_img = img[y1:y2, x1:x2]
+
+                cls_names = int(box.cls[0])
+                if cls_names == 1:
+                    state, chars, englishchars, charConfAvg = detectPlateChars(plate_img)
+                    char_display = [char for char in chars]
+                    englishchardisplay = [char for char in englishchars]
+
+                    if state:
+                        englishoutput = f"{englishchardisplay[0]}{englishchardisplay[1]}-{englishchardisplay[2]}-{englishchardisplay[3]}{englishchardisplay[4]}{englishchardisplay[5]}-{englishchardisplay[6]}{englishchardisplay[7]}"
+                        persian_output = f"{char_display[0]}{char_display[1]}-{char_display[2]}-{char_display[3]}{char_display[4]}{char_display[5]}-{char_display[6]}{char_display[7]}"
+                        # Check Redis for recent plate detection
+                        
+                        if last_plate ==englishoutput:
+                            k+=1
+                            insertion=True
+                            print("0")
+                        else:
+                            print("1")
+                            last_plate= englishoutput
+                            k = 0
+                            last_seen = redis_client.get(englishoutput)
+                            if last_seen:
+                                print("2")
+                                last_seen_time = datetime.fromisoformat(last_seen.decode('utf-8'))
+                                diff = datetime.now() - last_seen_time
+                                if diff < timedelta(minutes=checktimedup):
+                                    print("3")
+                                    if diff < timedelta(minutes=1):
+                                        txt = f"Detected {int(diff.total_seconds())} seconds before"
+                                    else:
+                                        txt = f"Detected {int(diff.total_seconds() // 60)} minute(s) before"
+                                    cv2.putText(img, txt, (0, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 50, 255), 2) 
+                                    cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)
+                                    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                                    draw = ImageDraw.Draw(img_pil)
+                                    draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
+                                    img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+                                    insertion= False
+                        if insertion==True and k >repeateplate:
+                            txt = "Detected before"
+                            cv2.putText(img, txt, (x1, y1-50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2) 
+                            cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)
                             img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
                             draw = ImageDraw.Draw(img_pil)
                             draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
                             img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-                            timestamp = current_time.strftime("%Y-%m-%d-%H-%M-%S")
-                            random_number = random.randint(1000, 9999)
-                            raw_filename = f"raw_{timestamp}_{random_number}.jpg"
-                            plate_filename = f"plt_{timestamp}-{random_number}.jpg"
-                            
-                            raw_path = os.path.join('static/images/raw', raw_filename)
-                            plate_path = os.path.join('static/images/plate', plate_filename)
-                            x1 = int(x1*frame.shape[1]/640)
-                            x2 = int(x2*frame.shape[1]/640)
-                            y1 = int(y1*frame.shape[0]/400)
-                            y2 = int(y2*frame.shape[0]/400)
-                            plate_img = frame[y1:y2,x1:x2]
-                            os.makedirs(os.path.dirname(raw_path), exist_ok=True)
-                            os.makedirs(os.path.dirname(plate_path), exist_ok=True)
-                            cv2.imwrite(raw_path, img)
-                            cv2.imwrite(plate_path, plate_img)
 
-                            raw_url = f"static/images/raw/{raw_filename}"
-                            plate_url = f"static/images/plate/{plate_filename}"
+                        if insertion==True and k == repeateplate:
+                                value = datetime.now().isoformat()
+                                redis_client.set(englishoutput, value)
+                                redis_client.setex(englishoutput, int(checktimedup*60), value)
+                                cv2.rectangle(img, (x1, y1), (x2, y2), color=(0, 215, 255), thickness=1)
+                                img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                                draw = ImageDraw.Draw(img_pil)
+                                draw.text((x1, y1 - 30), persian_output, font=persian_font, fill=(255, 0, 0))
+                                img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+                                timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+                                random_number = random.randint(1, 1000)
+                                raw_filename = f"raw_{timestamp}_{random_number}.jpg"
+                                plate_filename = f"plt_{timestamp}-{random_number}.jpg"
 
-                            cursor.execute(
-                                """
-                                INSERT INTO plates (date, raw_image_path, plate_cropped_image_path, predicted_string, camera_id)
-                                VALUES (%s, %s, %s, %s, %s)
-                                RETURNING id
-                                """,
-                                (timestamp, raw_url, plate_url, last_plate, cameraId)
-                            )
-                            plate_id = cursor.fetchone()[0]
-                            conn.commit()
-                            try:
-                                evenodd = 0
-                                try :
-                                    if int(char_display[-4])%2==0:
-                                        evenodd = 1
-                                except: 
-                                    evenodd=0
-                                data = {
-                                    "id": str(plate_id),  
-                                    "date": str(timestamp),
-                                    "raw_image_path": str(raw_url),
-                                    "plate_cropped_image_path": str(plate_url),
-                                    "predicted_string": str(englishoutput),
-                                    "cameraid": str(cameraId),
-                                    "evenodd":str(evenodd)
-                                }
-                                socketio.emit('plate_detected', data)
-                                print(f"Data emitted via SocketIO with ID: {plate_id}")
-                            except Exception as e:
-                                print(f"Error emitting data: {e}")
-                    
-                    last_plate = englishoutput
+                                raw_url = f"static/images/raw/{raw_filename}"
+                                plate_url = f"static/images/plate/{plate_filename}"
 
-    tock = time.time()
+                                x1 = int(x1 * frame.shape[1] / 640)
+                                x2 = int(x2 * frame.shape[1] / 640)
+                                y1 = int(y1 * frame.shape[0] / 400)
+                                y2 = int(y2 * frame.shape[0] / 400)
+                                plate_img = frame[y1:y2, x1:x2]
 
-    elapsed_time = tock - tick
-    if elapsed_time < 0.0001:
-        elapsed_time = 1
+                                cv2.imwrite(raw_url, img)
+                                cv2.imwrite(plate_url, plate_img)
 
-    fps_text = f"FPS: {1 / elapsed_time:.2f}"
+                                cursor.execute(
+                                    """
+                                    INSERT INTO plates (date, raw_image_path, plate_cropped_image_path, predicted_string, camera_id)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                    RETURNING id
+                                    """,
+                                    (timestamp, raw_url, plate_url, englishoutput, cameraId)
+                                )
+                                conn.commit()
+                                plate_id = cursor.fetchone()[0]
+                                try:
+                                    evenodd = 0
+                                    try:
+                                        if int(char_display[-4]) % 2 == 0:
+                                            evenodd = 1
+                                    except:
+                                        evenodd = 0
+                                    data = {
+                                        "id": str(plate_id),
+                                        "date": str(timestamp),
+                                        "raw_image_path": str(raw_url),
+                                        "plate_cropped_image_path": str(plate_url),
+                                        "predicted_string": str(englishoutput),
+                                        "cameraid": str(cameraId),
+                                        "evenodd": str(evenodd)
+                                    }
+                                    socketio.emit('plate_detected', data)
+                                    print(f"Data emitted via SocketIO with ID: {plate_id}")
+                                except Exception as e:
+                                    print(f"Error emitting data: {e}")
+        fps_text = f"FPS: {1 / (time.time() - tick):.2f}"
+        cv2.putText(img, fps_text, (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 50, 255), 2)
+        return img
 
-
-    cv2.putText(img, fps_text, (0, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (10, 50, 255), 2)
-    return img
 @app.route('/camera/<int:cameraId>/<int:mod>/stream', methods=['GET'])
 @cross_origin(supports_credentials=True)
 def video_feed(cameraId, mod):

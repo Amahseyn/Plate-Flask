@@ -104,7 +104,6 @@ def check_gps_port():
         cursor = conn.cursor()
         cursor.execute("SELECT gpsport, location, api_key FROM configuration LIMIT 1")
         row = cursor.fetchone()
-        print(f"Database Config: {row}")
 
         for port_number in range(1, 9):
             gpsport = f"COM{port_number}"
